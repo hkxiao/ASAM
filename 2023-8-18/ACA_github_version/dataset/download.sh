@@ -1,0 +1,1 @@
+wget -c https://github.com/VL-Group/Natural-Color-Fool/releases/download/data/images.zip
