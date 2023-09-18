@@ -148,3 +148,4 @@ dmypy.json
 **/stable-diffusion-v1-5/
 **/sam-subset-11187/
 *.ckpt
+*.gif

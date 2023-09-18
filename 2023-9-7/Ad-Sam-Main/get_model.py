@@ -24,6 +24,7 @@ def get_model(model):
         device = "cuda"
         sam = sam_model_registry_baseline[model_type](checkpoint=sam_checkpoint)
         sam.to(device=device)
+        predictor = SamPredictor(sam_model=sam)
         return sam
     
     elif model == 'resnet50':

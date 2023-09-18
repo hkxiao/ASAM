@@ -358,26 +358,26 @@ def show_self_attention_comp(attention_store: AttentionStore, res: int, from_whe
         images.append(image)
     ptp_utils.view_images(np.concatenate(images, axis=1), prefix='self_attention')
 
-def load_512(image_path, left=0, right=0, top=0, bottom=0):
-    if type(image_path) is str:
-        image = np.array(Image.open(image_path))[:, :, :3]
-    else:
-        image = image_path
-    h, w, c = image.shape
-    left = min(left, w-1)
-    right = min(right, w - left - 1)
-    top = min(top, h - left - 1)
-    bottom = min(bottom, h - top - 1)
-    image = image[top:h-bottom, left:w-right]
-    h, w, c = image.shape
-    if h < w:
-        offset = (w - h) // 2
-        image = image[:, offset:offset + h]
-    elif w < h:
-        offset = (h - w) // 2
-        image = image[offset:offset + w]
-    image = np.array(Image.fromarray(image).resize((512, 512)))
-    return image
+# def load_512(image_path, left=0, right=0, top=0, bottom=0):
+#     if type(image_path) is str:
+#         image = np.array(Image.open(image_path))[:, :, :3]
+#     else:
+#         image = image_path
+#     h, w, c = image.shape
+#     left = min(left, w-1)
+#     right = min(right, w - left - 1)
+#     top = min(top, h - left - 1)
+#     bottom = min(bottom, h - top - 1)
+#     image = image[top:h-bottom, left:w-right]
+#     h, w, c = image.shape
+#     if h < w:
+#         offset = (w - h) // 2
+#         image = image[:, offset:offset + h]
+#     elif w < h:
+#         offset = (h - w) // 2
+#         image = image[offset:offset + w]
+#     image = np.array(Image.fromarray(image).resize((512, 512)))
+#     return image
 
 
 class NullInversion:
@@ -537,7 +537,9 @@ class NullInversion:
     def invert(self, image_path: str, mask_control: torch.tensor ,prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
         self.init_prompt(prompt)
         ptp_utils.register_attention_control(self.model, None)
-        image_gt = load_512(image_path, *offsets)
+        
+        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt = np.array(image_gt).astype(np.float32)
         
         if verbose:
             print("DDIM inversion...")
@@ -546,7 +548,6 @@ class NullInversion:
             print("Null-text optimization...")
         uncond_embeddings = self.null_optimization(ddim_latents, mask_control, num_inner_steps, early_stop_epsilon)
         return (image_gt, image_rec), ddim_latents[-1], uncond_embeddings
-        
     
     def __init__(self, model):
         scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
@@ -697,4 +698,3 @@ if __name__ == '__main__':
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
         
         ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{save_path}/pair/sa_{i}')
-
