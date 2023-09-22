@@ -4,6 +4,7 @@ training/
 lightning_logs/
 image_log/
 
+*.txt
 *.pth
 *.pt
 *.ckpt

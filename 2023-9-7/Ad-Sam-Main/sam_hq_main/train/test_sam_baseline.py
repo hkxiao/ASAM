@@ -399,7 +399,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     net.eval()
     print("Validating...")
     test_stats = {}
-
+    sum_iou=0
     for k in range(len(valid_dataloaders)):
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
@@ -407,7 +407,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
 
         for data_val in metric_logger.log_every(valid_dataloader,1000):
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label']
-
+            print(data_val['ori_im_path'])
             if torch.cuda.is_available():
                 inputs_val = inputs_val.cuda()
                 labels_val = labels_val.cuda()
@@ -442,29 +442,11 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             with torch.no_grad():
                 batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
             
-            batch_len = len(batched_output)
-            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
-            
-            masks_sam, masks_hq = net(
-                image_embeddings=encoder_embedding,
-                image_pe=image_pe,
-                sparse_prompt_embeddings=sparse_embeddings,
-                dense_prompt_embeddings=dense_embeddings,
-                multimask_output=False,
-                hq_token_only=False,
-                interm_embeddings=interm_embeddings,
-            )
-
-            #masks = masks_sam + masks_hq
-            #masks = masks_sam
-            masks = masks_hq
+            masks = batched_output[0]['masks'].to(torch.float32)
             
             iou = compute_iou(masks,labels_ori)
             boundary_iou = compute_boundary_iou(masks,labels_ori)
-
+            sum_iou += iou
             if visualize:
                 print("visualize")
                 os.makedirs(args.output, exist_ok=True)
@@ -473,8 +455,6 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     base = data_val['imidx'][ii].item()
                     print('base:', base)
                     save_base = os.path.join(args.output, str(k)+'_'+ str(base))
-                    # print(save_base)
-                    # raise NameError
                     imgs_ii = imgs[ii].astype(dtype=np.uint8)
                     show_iou = torch.tensor([iou.item()])
                     show_boundary_iou = torch.tensor([boundary_iou.item()])
@@ -485,13 +465,14 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
 
+
         print('============================')
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
-
+        print(sum_iou/10)
     return test_stats
 
 
@@ -585,10 +566,10 @@ if __name__ == "__main__":
                  "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_test",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
-    
+
     dataset_dis_val = {"name": "DIS5K-VD",
-                 "im_dir": "./data/DIS5K/DIS-VD/im",
-                 "gt_dir": "./data/DIS5K/DIS-VD/gt",
+                 "im_dir": "/home/ubuntu/disk1/xhk/data/DIS5K/DIS-VD/im",
+                 "gt_dir": "/home/ubuntu/disk1/xhk/data/DIS5K/DIS-VD/gt",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
     dataset_coco_val = {"name": "COCO",
@@ -596,25 +577,17 @@ if __name__ == "__main__":
                  "gt_dir": "/data/tanglv/data/cosod_data/COCO/gt",
                  "im_ext": ".png",
                  "gt_ext": ".png"}
-    
     dataset_big_val = {"name": "BIG",
             "im_dir": "/data/tanglv/data/BIG/test",
             "gt_dir": "/data/tanglv/data/BIG/test",
             "im_ext": "_im.jpg",
             "gt_ext": "_gt.png"}
-
-    dataset_big_val = {"name": "cityscapes",
-        "im_dir": "/data/tanglv/data/cityscapes/gtFine/test",
-        "gt_dir": "/data/tanglv/data/cityscapes/gtFine/test",
-        "im_ext": "_im.jpg",
-        "gt_ext": "_gt.png"}
     
-    dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
-    "im_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-    "gt_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-    "im_ext": ".jpg",
-    "gt_ext": "_seg.png"}
-
+    dataset_ab_wheel = {"name": "ab_wheel",
+        "im_dir": "/home/ubuntu/disk1/xhk/data/ab_wheel",
+        "gt_dir": "/home/ubuntu/disk1/xhk/data/ab_wheel",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"}
 
     train_datasets = [dataset_sam_subset]
     valid_datasets = [dataset_coco_val] 

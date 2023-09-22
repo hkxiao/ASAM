@@ -1,21 +1,12 @@
-from diffusers import StableDiffusionControlNetPipeline
-from diffusers.utils import load_image
-
-# Let's load the popular vermeer image
-MY_TOKEN = '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'
-
-image = load_image("/data/tanglv/Ad-SAM/2023-9-7/Ad-Sam-Main/sam-subset-11187/sa_1.jpg")
+import os
 import cv2
-from PIL import Image
 import numpy as np
 
-image = np.array(image)
+path = "/data/tanglv/data/ADE20K_2016_07_26/images/training/a/abbey/ADE_train_00000970_seg.png"
 
-low_threshold = 100
-high_threshold = 200
+img = cv2.imread(path)
 
-image = cv2.Canny(image, low_threshold, high_threshold)
-image = image[:, :, None]
-image = np.concatenate([image, image, image], axis=2)
-canny_image = Image.fromarray(image)
-print(canny_image.shape)
+img = img[...,0]*(1<<16) + img[...,1]*(1<<8) + img[...,2]
+
+print(img.shape)
+print(len(np.unique(img)))

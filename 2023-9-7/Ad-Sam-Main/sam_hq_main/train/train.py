@@ -403,13 +403,14 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
             input_keys = ['box','point','noise_mask']
             labels_box = misc.masks_to_boxes(labels[:,0,:,:])
             try:
-                labels_points = misc.masks_sample_points(labels[:,0,:,:])
+                labels_points = misc.masks_sample_points(labels[:,0,:,:])  #[14,10,2]
             except:
                 # less than 10 points
                 input_keys = ['box','noise_mask']
             labels_256 = F.interpolate(labels, size=(256, 256), mode='bilinear')
             #print(torch.max(labels_256))
             labels_noisemask = misc.masks_noise(labels_256)
+            print(labels_noisemask.shape,labels_box.shape) #[14 1 256 256] [14 4]
 
             # print(labels_noisemask.shape, torch.max(labels_noisemask))
             # raise NameError
@@ -425,13 +426,16 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 input_type = random.choice(input_keys)
                 if input_type == 'box':
                     dict_input['boxes'] = labels_box[b_i:b_i+1]
+                    print(dict_input['boxes'].shape) #[1 4]
                 elif input_type == 'point':
-                    point_coords = labels_points[b_i:b_i+1]
+                    point_coords = labels_points[b_i:b_i+1]  #[1,10,2]
                     dict_input['point_coords'] = point_coords
-                    dict_input['point_labels'] = torch.ones(point_coords.shape[1], device=point_coords.device)[None,:]
+                    dict_input['point_labels'] = torch.ones(point_coords.shape[1], device=point_coords.device)[None,:] #[1,10]
+                    print(labels_points.shape)
+                    print(dict_input['point_coords'].shape,dict_input['point_labels'].shape)
                 elif input_type == 'noise_mask':
                     dict_input['mask_inputs'] = labels_noisemask[b_i:b_i+1]
-                    #print(dict_input['mask_inputs'].shape)
+                    print(dict_input['mask_inputs'].shape)  #[1 1 256 256]
                     #print(torch.max(dict_input['mask_inputs']))
                     #raise NameError
                 else:

@@ -21,6 +21,7 @@ from segment_anything_training import sam_model_registry
 from segment_anything_training.modeling import TwoWayTransformer, MaskDecoder
 
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
+from utils.dataloader_sam import create_dataloaders as create_sam_dataloaders
 from utils.loss_mask import loss_masks
 import utils.misc as misc
 
@@ -170,7 +171,7 @@ class MaskDecoderHQ(MaskDecoder):
             # singale mask output, default
             mask_slice = slice(0, 1)
             masks_sam = masks[:,mask_slice]
-
+        
         masks_hq = masks[:,slice(self.num_mask_tokens-1, self.num_mask_tokens), :, :]
         
         if hq_token_only:
@@ -283,9 +284,9 @@ def get_args_parser():
     parser.add_argument('--learning_rate', default=1e-3, type=float)
     parser.add_argument('--start_epoch', default=0, type=int)
     parser.add_argument('--lr_drop_epoch', default=10, type=int)
-    parser.add_argument('--max_epoch_num', default=12, type=int)
+    parser.add_argument('--max_epoch_num', default=20, type=int)
     parser.add_argument('--input_size', default=[1024,1024], type=list)
-    parser.add_argument('--batch_size_train', default=14, type=int)
+    parser.add_argument('--batch_size_train', default=1, type=int)
     parser.add_argument('--batch_size_valid', default=1, type=int)
     parser.add_argument('--model_save_fre', default=1, type=int)
 
@@ -322,7 +323,7 @@ def main(net, train_datasets, valid_datasets, args):
     if not args.eval:
         print("--- create training dataloader ---")
         train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train")
-        train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
+        train_dataloaders, train_datasets = create_sam_dataloaders(train_im_gt_list,
                                                         my_transforms = [
                                                                     RandomHFlip(),
                                                                     LargeScaleJitter()
@@ -333,8 +334,6 @@ def main(net, train_datasets, valid_datasets, args):
 
     print("--- create valid dataloader ---")
     valid_im_gt_list = get_im_gt_name_dict(valid_datasets, flag="valid")
-    # print(valid_im_gt_list)
-    # raise NameError
     valid_dataloaders, valid_datasets = create_dataloaders(valid_im_gt_list,
                                                           my_transforms = [
                                                                         Resize(args.input_size)
@@ -371,6 +370,136 @@ def main(net, train_datasets, valid_datasets, args):
                 net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
     
         evaluate(args, net, sam, valid_dataloaders, args.visualize)
+
+
+def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
+    if misc.is_main_process():
+        os.makedirs(args.output, exist_ok=True)
+
+    epoch_start = args.start_epoch
+    epoch_num = args.max_epoch_num
+    train_num = len(train_dataloaders)
+
+    net.train()
+    _ = net.to(device=args.device)
+    
+    sam = sam_model_registry[args.model_type](checkpoint=args.checkpoint)
+    _ = sam.to(device=args.device)
+    sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+    
+    for epoch in range(epoch_start,epoch_num): 
+        print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
+        metric_logger = misc.MetricLogger(delimiter="  ")
+        train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
+
+        for data in metric_logger.log_every(train_dataloaders,1000):
+            inputs, labels = data['image'], data['label']  # [1 3 1024 1024]   [1 N 1024 1024]
+            if torch.cuda.is_available(): 
+                inputs = inputs.cuda()
+                labels = labels.permute(1,0,2,3).cuda()  #[N 1 1024 1024]
+
+            imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()  #[1 1024 1024 3]
+            
+            # input prompt
+            input_keys = ['box','point','noise_mask']
+            labels_box = misc.masks_to_boxes(labels[:,0,:,:]) #[N 4]
+            try:
+                labels_points = misc.masks_sample_points(labels[:,0,:,:]) #[N 10 2]
+            except:
+                # less than 10 points
+                input_keys = ['box','noise_mask']
+            labels_256 = F.interpolate(labels, size=(256, 256), mode='bilinear')
+            #print(torch.max(labels_256))
+            labels_noisemask = misc.masks_noise(labels_256) #[N 1 256 256]
+
+            batched_input = []
+
+            dict_input = dict()
+            input_image = torch.as_tensor(imgs[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous()
+            dict_input['image'] = input_image 
+
+            input_type = random.choice(input_keys)
+            if input_type == 'box':
+                dict_input['boxes'] = labels_box  #N*4
+            elif input_type == 'point':
+                point_coords = labels_points # N 10 2
+                dict_input['point_coords'] = point_coords
+                dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
+            elif input_type == 'noise_mask':
+                dict_input['mask_inputs'] = labels_noisemask # N 1 256 256
+
+            else:
+                raise NotImplementedError
+
+            dict_input['original_size'] = imgs[0].shape[:2]
+            
+            batched_input.append(dict_input)
+            with torch.no_grad():
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
+            
+            batch_len = len(batched_output)
+            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
+            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
+            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
+            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+
+            masks_hq = net(
+                image_embeddings=encoder_embedding,
+                image_pe=image_pe,
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=False,
+                hq_token_only=True,
+                interm_embeddings=interm_embeddings,
+            )
+
+            loss_mask, loss_dice = loss_masks(masks_hq, labels/255.0, len(masks_hq))
+            loss = loss_mask + loss_dice
+            
+            loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
+
+            # reduce losses over all GPUs for logging purposes
+            loss_dict_reduced = misc.reduce_dict(loss_dict)
+            losses_reduced_scaled = sum(loss_dict_reduced.values())
+            loss_value = losses_reduced_scaled.item()
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            metric_logger.update(training_loss=loss_value, **loss_dict_reduced)
+
+
+        print("Finished epoch:      ", epoch)
+        metric_logger.synchronize_between_processes()
+        print("Averaged stats:", metric_logger)
+        train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
+
+        lr_scheduler.step()
+        test_stats = evaluate(args, net, sam, valid_dataloaders)
+        train_stats.update(test_stats)
+        
+        net.train()  
+
+        if epoch % args.model_save_fre == 0:
+            model_name = "/epoch_"+str(epoch)+".pth"
+            print('come here save at', args.output + model_name)
+            misc.save_on_master(net.module.state_dict(), args.output + model_name)
+    
+    # Finish training
+    print("Training Reaches The Maximum Epoch Number")
+    
+    # merge sam and hq_decoder
+    if misc.is_main_process():
+        sam_ckpt = torch.load(args.checkpoint)
+        hq_decoder = torch.load(args.output + model_name)
+        for key in hq_decoder.keys():
+            sam_key = 'mask_decoder.'+key
+            if sam_key not in sam_ckpt.keys():
+                sam_ckpt[sam_key] = hq_decoder[key]
+        model_name = "/sam_hq_epoch_"+str(epoch)+".pth"
+        torch.save(sam_ckpt, args.output + model_name)
+
 
 
 def compute_iou(preds, target):
@@ -412,7 +541,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 inputs_val = inputs_val.cuda()
                 labels_val = labels_val.cuda()
                 labels_ori = labels_ori.cuda()
-            #print(torch.max(inputs_val))
+            print(torch.max(inputs_val))
             
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy()
             
@@ -421,7 +550,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             batched_input = []
             for b_i in range(len(imgs)):
                 dict_input = dict()
-                #print(imgs.shape, np.max(imgs))
+                print(imgs.shape, np.max(imgs))
                 
                 input_image = torch.as_tensor(imgs[b_i].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous()
                 dict_input['image'] = input_image 
@@ -458,23 +587,17 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 interm_embeddings=interm_embeddings,
             )
 
-            #masks = masks_sam + masks_hq
-            #masks = masks_sam
-            masks = masks_hq
-            
-            iou = compute_iou(masks,labels_ori)
-            boundary_iou = compute_boundary_iou(masks,labels_ori)
+            iou = compute_iou(masks_hq,labels_ori)
+            boundary_iou = compute_boundary_iou(masks_hq,labels_ori)
 
             if visualize:
                 print("visualize")
                 os.makedirs(args.output, exist_ok=True)
-                masks_hq_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+                masks_hq_vis = (F.interpolate(masks_hq.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
                 for ii in range(len(imgs)):
                     base = data_val['imidx'][ii].item()
                     print('base:', base)
                     save_base = os.path.join(args.output, str(k)+'_'+ str(base))
-                    # print(save_base)
-                    # raise NameError
                     imgs_ii = imgs[ii].astype(dtype=np.uint8)
                     show_iou = torch.tensor([iou.item()])
                     show_boundary_iou = torch.tensor([boundary_iou.item()])
@@ -485,12 +608,14 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
 
+
         print('============================')
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
+
 
     return test_stats
 
@@ -554,11 +679,17 @@ if __name__ == "__main__":
                 "gt_ext": ".png"}
     
     
+    dataset_sam_subset_ori = {"name": "sam_subset",
+                "im_dir": "/data/tanglv/data/sam-1b-subset",
+                "gt_dir": "/data/tanglv/data/sam-1b-subset",
+                "im_ext": ".jpg",
+                "gt_ext": ".json"}
+    
     dataset_sam_subset = {"name": "sam_subset",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-8-18/Ad-Sam-Main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/pair",
-                "gt_dir": "/data/tanglv/Ad-SAM/2023-8-18/Ad-Sam-Main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/pair",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
+            "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-0.01-100-1-2-10-Clip-0.2/adv",
+            "gt_dir": "/data/tanglv/data/sam-1b-subset",
+            "im_ext": ".png",
+            "gt_ext": ".json"}
         
     
     # valid set
@@ -573,51 +704,21 @@ if __name__ == "__main__":
                  "gt_dir": "/data/tanglv/data/sod_data/HRSOD-TE/gts",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
-    
-    dataset_davis_val = {"name": "DAVIS-S",
-                "im_dir": "/data/tanglv/data/sod_data/DAVIS-S/imgs",
-                "gt_dir": "/data/tanglv/data/sod_data/DAVIS-S/gts",
-                "im_ext": ".jpg",
-                "gt_ext": ".png"}
 
     dataset_thin_val = {"name": "ThinObject5k-TE",
                  "im_dir": "./data/thin_object_detection/ThinObject5K/images_test",
                  "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_test",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
-    
+
     dataset_dis_val = {"name": "DIS5K-VD",
                  "im_dir": "./data/DIS5K/DIS-VD/im",
                  "gt_dir": "./data/DIS5K/DIS-VD/gt",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
-    dataset_coco_val = {"name": "COCO",
-                 "im_dir": "/data/tanglv/data/cosod_data/COCO/img",
-                 "gt_dir": "/data/tanglv/data/cosod_data/COCO/gt",
-                 "im_ext": ".png",
-                 "gt_ext": ".png"}
-    
-    dataset_big_val = {"name": "BIG",
-            "im_dir": "/data/tanglv/data/BIG/test",
-            "gt_dir": "/data/tanglv/data/BIG/test",
-            "im_ext": "_im.jpg",
-            "gt_ext": "_gt.png"}
 
-    dataset_big_val = {"name": "cityscapes",
-        "im_dir": "/data/tanglv/data/cityscapes/gtFine/test",
-        "gt_dir": "/data/tanglv/data/cityscapes/gtFine/test",
-        "im_ext": "_im.jpg",
-        "gt_ext": "_gt.png"}
-    
-    dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
-    "im_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-    "gt_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-    "im_ext": ".jpg",
-    "gt_ext": "_seg.png"}
-
-
-    train_datasets = [dataset_sam_subset]
-    valid_datasets = [dataset_coco_val] 
+    train_datasets = [dataset_sam_subset_ori]
+    valid_datasets = [dataset_hrsod_val] 
 
     args = get_args_parser()
     net = MaskDecoderHQ(args.model_type) 
