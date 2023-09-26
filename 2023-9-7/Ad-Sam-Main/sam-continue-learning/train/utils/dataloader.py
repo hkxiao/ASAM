@@ -17,10 +17,16 @@ from torchvision import transforms, utils
 from torchvision.transforms.functional import normalize
 import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
-import json
-from pycocotools import mask
+from utils.dataloader_sam import SamDataset
+from utils.dataloader_ade20k import Ade20kDataset
 
 #### --------------------- dataloader online ---------------------####
+
+
+def collate(batch):
+    print(len(batch))
+    
+    return batch
 
 def get_im_gt_name_dict(datasets, flag='valid'):
     print("------------------------------", flag, "--------------------------------")
@@ -29,14 +35,18 @@ def get_im_gt_name_dict(datasets, flag='valid'):
     for i in range(len(datasets)):
         print("--->>>", flag, " dataset ",i,"/",len(datasets)," ",datasets[i]["name"],"<<<---")
         tmp_im_list, tmp_gt_list = [], []
-        tmp_im_list = glob(datasets[i]["im_dir"]+os.sep+'*'+datasets[i]["im_ext"])
+        for root, dirs, files in os.walk(datasets[i]["im_dir"]):
+            #print(root)
+            # raise NameError
+            tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
 
         if(datasets[i]["gt_dir"]==""):
             print('-gt-', datasets[i]["name"], datasets[i]["gt_dir"], ': ', 'No Ground Truth Found')
             tmp_gt_list = []
         else:
-            tmp_gt_list = [datasets[i]["gt_dir"]+os.sep+x.split(os.sep)[-1].split(datasets[i]["im_ext"])[0]+datasets[i]["gt_ext"] for x in tmp_im_list]
+            #tmp_gt_list = [datasets[i]["gt_dir"]+os.sep+x.split(os.sep)[-1].split(datasets[i]["im_ext"])[0]+datasets[i]["gt_ext"] for x in tmp_im_list]
+            tmp_gt_list = [x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]) for x in tmp_im_list]
             print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
 
 
@@ -48,7 +58,7 @@ def get_im_gt_name_dict(datasets, flag='valid'):
 
     return name_im_gt_list
 
-def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, training=False):
+def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1,training=False):
     gos_dataloaders = []
     gos_datasets = []
 
@@ -63,25 +73,26 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, training
     if(batch_size>8):
         num_workers_ = 8
 
-
     if training:
-        for i in range(len(name_im_gt_list)):   
-            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
+        for i in range(len(name_im_gt_list)):
+            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), batch_size_prompt=batch_size_prompt)
+            else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
             gos_datasets.append(gos_dataset)
 
         gos_dataset = ConcatDataset(gos_datasets)
         sampler = DistributedSampler(gos_dataset)
         batch_sampler_train = torch.utils.data.BatchSampler(
             sampler, batch_size, drop_last=True)
-        
         dataloader = DataLoader(gos_dataset, batch_sampler=batch_sampler_train, num_workers=num_workers_)
 
         gos_dataloaders = dataloader
         gos_datasets = gos_dataset
 
     else:
-        for i in range(len(name_im_gt_list)):   
-            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
+        for i in range(len(name_im_gt_list)):  
+            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt)
+            elif 'ADE' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), batch_size_prompt=batch_size_prompt)
+            else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             sampler = DistributedSampler(gos_dataset, shuffle=False)
             dataloader = DataLoader(gos_dataset, batch_size, sampler=sampler, drop_last=False, num_workers=num_workers_)
 
@@ -200,7 +211,6 @@ class LargeScaleJitter(object):
         return {'imidx':imidx,'image':image, 'label':label, 'shape':torch.tensor(image.shape[-2:])}
 
 
-
 class OnlineDataset(Dataset):
     def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False):
 
@@ -244,45 +254,48 @@ class OnlineDataset(Dataset):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
         
-        im = io.imread(im_path)
-        
-        json_dict = json.loads(open(gt_path,'r').read())
-        annotations = json_dict['annotations']
-        
-        annotations = sorted(annotations, key=lambda x:x['bbox'][2]*x['bbox'][3], reverse=True)
-        
-        batchsize = 4
-        if len(annotations) > batchsize:
-            annotations = annotations[:batchsize]
+        if 'sam' not in self.dataset["gt_path"][idx]:
+            im = io.imread(im_path)
+            gt = io.imread(gt_path)
+        else:
+            #print(im_path)
+            all = io.imread(im_path)
+            # print(all.shape)
+            # print(type(all))
+            im, gt = all[:,:512,:], all[:,522:1034,:]
+            # import cv2
+            # cv2.imwrite("demo_im.png", im)
+            # cv2.imwrite("demo_gt.png", gt)
+            # cv2.imwrite("demo.png", all)
+            # raise NameError
             
-        gt = np.empty((0,json_dict['image']['height'],json_dict['image']['width']))
-        for annotation in annotations:
-            encode_mask = annotation['segmentation']
-            decoded_mask = mask.decode(encode_mask)*255.0
-            gt = np.concatenate((gt,decoded_mask[np.newaxis,:,:]),0)
-        
-            
+        if len(gt.shape) > 2:
+            gt = gt[:, :, 0]
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
             im = np.repeat(im, 3, axis=2)
-            
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
-        gt = torch.tensor(gt, dtype=torch.float32)
-
+        gt = torch.unsqueeze(torch.tensor(gt, dtype=torch.float32),0)
+        # print(torch.max(im), torch.min(im))
+        # print(torch.max(gt), torch.min(gt))
+        # raise NameError
         sample = {
         "imidx": torch.from_numpy(np.array(idx)),
         "image": im,
         "label": gt,
         "shape": torch.tensor(im.shape[-2:]),
         }
-
-        if self.transform: 
+        
+        if self.transform:
             sample = self.transform(sample)
 
-        sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
-        sample['ori_im_path'] = self.dataset["im_path"][idx]
-        sample['ori_gt_path'] = self.dataset["gt_path"][idx]
+        if self.eval_ori_resolution:
+            # print(torch.max(im))
+            # raise NameError
+            sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
+            sample['ori_im_path'] = self.dataset["im_path"][idx]
+            sample['ori_gt_path'] = self.dataset["gt_path"][idx]
 
         return sample
