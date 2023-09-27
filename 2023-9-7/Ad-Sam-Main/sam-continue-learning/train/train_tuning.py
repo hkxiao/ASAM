@@ -704,7 +704,6 @@ if __name__ == "__main__":
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
     
-    
     dataset_coco_subset_val = {"name": "COCO",
                 "im_dir": "/data/tanglv/data/COCO/img",
                 "gt_dir": "/data/tanglv/data/COCO/gt",
@@ -716,16 +715,33 @@ if __name__ == "__main__":
                 "gt_dir": "/data/tanglv/data/BIG/test",
                 "im_ext": "_im.jpg",
                 "gt_ext": "_gt.png"}
-
-    
+    #全景分割
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
                 "im_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
                 "gt_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
                 "im_ext": ".jpg",
                 "gt_ext": "_seg.png"}
+    #实列分割
+    dataset_cityscapes_val = {"name": "cityscaps_val",
+                "im_dir": "/data/tanglv/data/cityscapes/leftImg8bit/val",
+                "gt_dir": "/data/tanglv/data/cityscapes/gtFine/val",
+                "im_ext": "_leftImg8bit.png",
+                "gt_ext": "_instanceId.png"}
+    #实列分割
+    dataset_voc2012_val = {"name": "voc2012_val",
+                "im_dir": "/data/tanglv/data/VOCdevkit/VOC2012/JPEGImages_val",
+                "gt_dir": "/data/tanglv/data/VOCdevkit/VOC2012/SegmentationObject",
+                "im_ext": ".jpg",
+                "gt_ext": ".png"}
+    #实列分割
+    dataset_coco2017_val = {"name": "coco2017_val",
+            "im_dir": "/data/tanglv/data/COCO2017-val/val2017",
+            "annotation_file": "/data/tanglv/data/COCO2017-val/instances_val2017.json",
+            "im_ext": ".jpg"
+            }
     
     train_datasets = [dataset_sam_subset_ori]
-    valid_datasets = [dataset_hrsod_val] 
+    valid_datasets = [dataset_coco2017_val, dataset_ade20k_val, dataset_cityscapes_val, dataset_voc2012_val, dataset_hrsod_val] 
 
     args = get_args_parser()
     net = MaskDecoderTL(args.model_type) 

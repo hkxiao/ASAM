@@ -19,6 +19,8 @@ import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
 from utils.dataloader_sam import SamDataset
 from utils.dataloader_ade20k import Ade20kDataset
+from utils.dataloader_COCO import COCODataset
+from utils.dataloader_VOC2012 import VOC2012Dataset
 
 #### --------------------- dataloader online ---------------------####
 
@@ -32,15 +34,22 @@ def get_im_gt_name_dict(datasets, flag='valid'):
     print("------------------------------", flag, "--------------------------------")
     name_im_gt_list = []
 
-    for i in range(len(datasets)):
+    for i in range(len(datasets)):        
         print("--->>>", flag, " dataset ",i,"/",len(datasets)," ",datasets[i]["name"],"<<<---")
+        if "coco" in  datasets[i]["name"]:   
+            name_im_gt_list.append({"dataset_name":datasets[i]["name"],
+                "root_dir": "/data/tanglv/data/COCO2017-val/val2017",
+                "annotation_file": "/data/tanglv/data/COCO2017-val/instances_val2017.json"})
+            print("COCO continue")
+            continue
+        
         tmp_im_list, tmp_gt_list = [], []
         for root, dirs, files in os.walk(datasets[i]["im_dir"]):
             #print(root)
             # raise NameError
             tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
-
+        
         if(datasets[i]["gt_dir"]==""):
             print('-gt-', datasets[i]["name"], datasets[i]["gt_dir"], ': ', 'No Ground Truth Found')
             tmp_gt_list = []
@@ -91,7 +100,10 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
     else:
         for i in range(len(name_im_gt_list)):  
             if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt)
-            elif 'ADE' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), batch_size_prompt=batch_size_prompt)
+            elif 'ADE' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True, batch_size_prompt=batch_size_prompt)
+            elif 'cityscaps_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True, batch_size_prompt=batch_size_prompt)
+            elif 'voc2012_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = VOC2012Dataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True, batch_size_prompt=batch_size_prompt)
+            elif 'coco' in name_im_gt_list[i]['dataset_name']: gos_dataset = COCODataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True, batch_size_prompt=batch_size_prompt)
             else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             sampler = DistributedSampler(gos_dataset, shuffle=False)
             dataloader = DataLoader(gos_dataset, batch_size, sampler=sampler, drop_last=False, num_workers=num_workers_)

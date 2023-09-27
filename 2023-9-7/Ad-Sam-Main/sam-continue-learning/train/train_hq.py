@@ -524,7 +524,7 @@ def compute_boundary_iou(preds, target):
     for i in range(0,len(preds)):
         iou = iou + misc.boundary_iou(target[i],postprocess_preds[i])
     return iou / len(preds)
-
+@torch.no_grad()
 def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     net.eval()
     print("Validating...")
