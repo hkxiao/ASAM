@@ -6,10 +6,10 @@ from torch.utils.data import Dataset
 
 
 class MyDataset(Dataset):
-    def __init__(self,root):
+    def __init__(self,root,json_path):
         self.data = []
         self.root = root
-        with open('sam-1b-controlnet-train.json', 'rt') as f:
+        with open(json_path, 'rt') as f:
             for line in f:
                 self.data.append(json.loads(line))
 

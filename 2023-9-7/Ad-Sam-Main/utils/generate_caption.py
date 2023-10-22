@@ -8,8 +8,9 @@ from lavis.models import load_model_and_preprocess
 # setup device to use
 device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
+#CUDA_VISIBLE_DEVICES=5 python generate_captin.py
 dir = '/data/tanglv/data/'
-datasets = ['sam-1b-subset']
+datasets = ['sa_000001']
 
 # loads BLIP-2 pre-trained model
 model, vis_processors, _ = load_model_and_preprocess(name="blip2_t5", model_type="caption_coco_flant5xl", is_eval=True, device=device)
@@ -26,7 +27,7 @@ for dataset in datasets:
     img_files = [x for x in files if 'jpg' in x]
     img_files = sorted(img_files)
         
-    for i in trange(11186,11187):    
+    for i in trange(11187,30000):    
         img_file= 'sa_' + str(i+1)+'.jpg'
         print(img_file)
         

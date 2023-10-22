@@ -12,11 +12,13 @@ import tensorboard
 parser  = argparse.ArgumentParser()
 parser.add_argument('--gpus',type=int)
 parser.add_argument('--dataset',type=str)
+parser.add_argument('--json_path',type=str)
+parser.add_argument('--resume',type=str, default='models/control_sd15_ini.ckpt')
 args = parser.parse_args()
 
 
 # Configs
-resume_path = '/data/tanglv/Ad-SAM/2023-9-7/Ad-Sam-Main/ControlNet-main/lightning_logs/version_20/checkpoints/epoch=63-step=44799.ckpt'
+resume_path = args.resume
 batch_size = 4
 logger_freq = 300
 learning_rate = 1e-5
@@ -32,7 +34,7 @@ model.sd_locked = sd_locked
 model.only_mid_control = only_mid_control
 
 # Misc
-dataset = MyDataset(root=args.dataset)
+dataset = MyDataset(root=args.dataset,json_path=args.json_path)
 dataloader = DataLoader(dataset, num_workers=0, batch_size=batch_size, shuffle=True)
 logger = ImageLogger(batch_frequency=logger_freq)
 # trainer = pl.Trainer(strategt, gpus=args.gpus, precision=32, callbacks=[logger])

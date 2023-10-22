@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import cv2
 import json    
 from pycocotools import mask
-from sam_hq_main.segment_anything.MyPredictor import SamPredictor
+from sam_continue_learning.segment_anything.MyPredictor import SamPredictor
 
 '''
 CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --beta 1 --alpha 0.01 --steps 10  --ddim_steps=50 --norm 2
@@ -33,12 +33,14 @@ CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --be
 ############## Initialize #####################
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--model', type=str, default='sam', help='cnn')
+parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
 parser.add_argument('--gamma', type=float, default=100, help='cnn')
 parser.add_argument('--beta', type=float, default=1, help='cnn')
 parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--norm', type=int, default=2, help='cnn')
+parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
@@ -74,7 +76,7 @@ else:
 mean = torch.Tensor(mean).cuda()
 std = torch.Tensor(std).cuda()
 
-net = get_model(args.model)
+net = get_model(args.model, args.model_type)
 if device == 'cuda':
     net.to(device)
     cudnn.benchmark = True
@@ -151,6 +153,7 @@ class EmptyControl:
 def mae_value(x, y):
     return torch.abs(x-y).mean()
 
+@torch.no_grad()
 def compute_iou(preds, target):
     def mask_iou(pred_label,label):
         '''
@@ -730,32 +733,29 @@ def text2image_ldm_stable_last(
             image = limitation01(image)
             image_m = F.interpolate(image, image_size)
             #print(1, image_m.max(), image_m.min())
-
             net.set_torch_image(image_m*255.0,original_image_size=(1024,1024))
                         
             ad_masks, ad_iou_predictions, ad_low_res_logits = net.predict_torch(point_coords=None,point_labels=None,boxes=boxes,multimask_output=False)
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits,mask_labels) 
         
-            iou = compute_iou(ad_low_res_logits.detach(), mask_labels.detach()).item()
-            if iou < worst_iou:
+            iou = compute_iou(ad_low_res_logits, mask_labels).item()
+            if iou < worst_iou:                
                 best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
                     
             image_m = image_m - mean[None,:,None,None]
             image_m = image_m / std[None,:,None,None]
-            print(3, image_m.max(), image_m.min(), raw_img.max(), raw_img.min())
-            loss_mse =   args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
+            print(k, image_m.max(), image_m.min(), raw_img.max(), raw_img.min())
+            loss_mse =  args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
             #loss_mse = -args.beta * ((image_m-raw_img)**2).mean()
             
             loss = loss_ce - loss_mse
             loss.backward()
-            # print(image.shape)
-            # print(latents.shape, latent.shape)
             print('*' * 50)
             print('Loss', loss.item(),'Loss_ce', loss_ce.item(), 'Loss_mse', loss_mse.item())
             print(k, 'Predicted:', loss)
             print('Grad:', latents_last.grad.min(), latents_last.grad.max())
-
             # print(latent.min(), latent.max())
+        
         l1_grad = latents_last.grad / torch.norm(latents_last.grad, p=1)
         print('L1 Grad:', l1_grad.min(), l1_grad.max())
         momentum = args.mu * momentum + l1_grad
@@ -847,8 +847,8 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-    controlnet = ControlNetModel.from_single_file("pretrained/control_v11p_sd15_mask_sam_v2.pth").to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("./stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    controlnet = ControlNetModel.from_single_file("ckpt/control_v11p_sd15_mask_sam_v2.pth").to(device)    
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
 
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
@@ -859,7 +859,7 @@ if __name__ == '__main__':
     annotation_dir = '/data/tanglv/data/sam-1b-subset'
     dataset_dir = 'sam-subset-11187'
     
-    save_path = './11187-Grad/' + args.prefix + '-' + str(args.mu) + '-' + args.model + '-' + str(args.alpha) + '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) + '-' + str(args.steps) + '-Clip-' + str(args.eps) + '/'
+    save_path = './11187-Grad/' + args.prefix + '-' + str(args.mu) + '-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-' +str(args.alpha) + '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) + '-' + str(args.steps) + '-Clip-' + str(args.eps) + '/'
     print("Save Path:", save_path)
     if not os.path.exists(save_path): os.mkdir(save_path)
     if not os.path.exists(save_path+'pair/'): os.mkdir(save_path+'pair/')
@@ -893,10 +893,12 @@ if __name__ == '__main__':
         annotations = sorted(annotations, key=lambda x: x['bbox'][2]*x['bbox'][3], reverse=True)
         global origin_len
         origin_len = len(annotations)
-        batch_size = 160
-        if len(annotations) > batch_size:
-            annotations = annotations[:batch_size]
-          
+
+        if len(annotations) > args.sam_batch:
+            annotations = annotations[:args.sam_batch]
+        
+        print("========> batchsize:",len(annotations))
+        
         prompt = captions[img_path.split('/')[-1]]
         print(prompt)
         

@@ -7,13 +7,13 @@ import json
 import numpy as np
 from tqdm import tqdm
 
-dir = '/data/tanglv/data/sam-1b-subset/'
-new_dir = '../sam-subset-11187/'
+dir = '/data/tanglv/data/sa_000001/'
+new_dir = '../sa_000001/'
 
 files = os.listdir(dir)
 Path(new_dir).mkdir(exist_ok=True, parents=True)
 
-for i in tqdm(range(91,11188)):
+for i in tqdm(range(11188,30000)):
     img_file = 'sa_'+str(i)+'.jpg'
     json_file = img_file.replace('jpg', 'json')
     
@@ -41,9 +41,6 @@ for i in tqdm(range(91,11188)):
         control_signal[decode_mask==1] = color
 
     alls = len(np.unique(control_signal[:,:,0] + control_signal[:,:,1]*256 + control_signal[:,:,2]*256*256))
-    #if len(annotations) > alls:
-    #    print(len(annotations), alls)
-    #    raise NameError
     
     control_signal = control_signal[:,:,::-1]
     cv2.imwrite(new_dir+img_file.replace('.jpg','.png'),control_signal)

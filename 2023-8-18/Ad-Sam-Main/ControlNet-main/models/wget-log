@@ -1,6 +1,0 @@
---2023-07-14 23:55:20--  https://cdn-lfs.huggingface.co/repos/f6/65/f665e553e8fd16131981a96c629e785939f08080bb3cbf8d2b7f5ddbd9e6100a/4de384b16bc2d7a1fb258ca0cbd941d7dd0a721ae996aff89f905299d6923f45?response-content-disposition=attachment%3B+filename*%3DUTF-8%27%27control_sd15_canny.pth%3B+filename%3D%22control_sd15_canny.pth%22%3B
-Resolving cdn-lfs.huggingface.co (cdn-lfs.huggingface.co)... 2600:9000:2135:8800:11:f807:5180:93a1, 2600:9000:2135:b200:11:f807:5180:93a1, 2600:9000:2135:4200:11:f807:5180:93a1, ...
-Connecting to cdn-lfs.huggingface.co (cdn-lfs.huggingface.co)|2600:9000:2135:8800:11:f807:5180:93a1|:443... connected.
-HTTP request sent, awaiting response... 403 Forbidden
-2023-07-14 23:55:20 ERROR 403: Forbidden.
-
