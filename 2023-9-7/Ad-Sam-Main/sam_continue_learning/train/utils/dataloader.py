@@ -66,7 +66,7 @@ def get_im_gt_name_dict(datasets, flag='valid'):
 
     return name_im_gt_list
 
-def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1, batch_size_prompt_start=0, training=False):
+def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1, batch_size_prompt_start=0, training=False, numworkers=-1):
     gos_dataloaders = []
     gos_datasets = []
 
@@ -74,13 +74,13 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
         return gos_dataloaders, gos_datasets
 
     num_workers_ = 0
-    if(batch_size>=2):
+    if(batch_size>1):
         num_workers_ = 2
-    if(batch_size>=4):
+    if(batch_size>4):
         num_workers_ = 4
-    if(batch_size>=8):
+    if(batch_size>8):
         num_workers_ = 8
-    num_workers_ = 0
+    if numworkers!=-1:  num_workers_ = numworkers
     
     if training:
         for i in range(len(name_im_gt_list)):

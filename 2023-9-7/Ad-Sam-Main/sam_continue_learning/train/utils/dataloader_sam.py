@@ -105,6 +105,7 @@ class SamDataset(Dataset):
         gt = None
         for i in range(self.batch_size_prompt_start, self.batch_size_prompt_start+self.batch_size_prompt):
             tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
+            #print(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
             if len(tmp_gt.shape) > 2:
                 tmp_gt = tmp_gt[:, :, 0]
             tmp_gt = np.expand_dims(tmp_gt, axis=0)
