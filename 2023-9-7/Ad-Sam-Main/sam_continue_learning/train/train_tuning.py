@@ -278,6 +278,7 @@ def get_args_parser():
 
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--numworkers', type=int, default=-1)
     parser.add_argument("--restore-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
 
@@ -314,7 +315,8 @@ def main(net, train_datasets, valid_datasets, args):
                                                         batch_size = args.batch_size_train,
                                                         batch_size_prompt = args.batch_size_prompt,
                                                         batch_size_prompt_start = args.batch_size_prompt_start,
-                                                        training = True)
+                                                        training = True,
+                                                        numworkers=args.numworkers)
         print(len(train_dataloaders), " train dataloaders created")
 
     print("--- create valid dataloader ---")
@@ -532,7 +534,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader))
 
-        for data_val in metric_logger.log_every(valid_dataloader,1000):
+        for data_val in metric_logger.log_every(valid_dataloader,10):
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
@@ -780,7 +782,7 @@ if __name__ == "__main__":
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
     
-    valid_datasets = [dataset_sam_subset_adv]
+    valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_big_val]
     
