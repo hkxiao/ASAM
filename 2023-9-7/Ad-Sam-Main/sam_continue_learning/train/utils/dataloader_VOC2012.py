@@ -69,19 +69,17 @@ class VOC2012Dataset(Dataset):
         im = io.imread(im_path)
         naive_gt = io.imread(gt_path)        
         
-        
         naive_gt = naive_gt[...,0] + naive_gt[...,1]*(1<<8) + naive_gt[...,2]*(1<<16)
         unique_list = sorted(np.unique(naive_gt))
-        
         gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
-        #print(im_path,unique_list)
+        
         for i in unique_list:
-            if i == 0 or i == 224*(1<<16)+224*(1<<8)+192:
+            if i == 0 or i == 192*(1<<16)+224*(1<<8)+224:
                 continue
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
             tmp_gt[naive_gt==i]=255
             gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
-
+        
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
