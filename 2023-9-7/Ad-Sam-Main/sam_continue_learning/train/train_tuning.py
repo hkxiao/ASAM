@@ -691,10 +691,10 @@ if __name__ == "__main__":
     
     
     dataset_sam_subset_ori = {"name": "sam_subset",
-                "im_dir": "/data/tanglv/data/sam-1b-subset",
-                "gt_dir": "/data/tanglv/data/sam-1b-subset",
+                "im_dir": "/data/tanglv/data/sam-1b/sa_000000",
+                "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
                 "im_ext": ".jpg",
-                "gt_ext": ".json"}
+                "gt_ext": ""}
     
     dataset_sam_subset_adv = {"name": "sam_subset",
             "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
@@ -703,10 +703,11 @@ if __name__ == "__main__":
             "gt_ext": ""}
     
     dataset_sam_subset_adv_1600 = {"name": "sam_subset",
-    "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
-    "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
-    "im_ext": ".png",
-    "gt_ext": ""}
+        "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
+        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""}
+    
     
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
         "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
@@ -798,6 +799,7 @@ if __name__ == "__main__":
     #valid_datasets = [dataset_sam_subset_ori]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
+    #valid_datasets = [dataset_sam_subset_adv_1600] 
     #valid_datasets = [dataset_big_val]
     
     args = get_args_parser()
