@@ -730,7 +730,7 @@ if __name__ == "__main__":
                 "gt_ext": "_seg.png"}
 
     train_datasets = [dataset_sam_subset_ori]
-    valid_datasets = [dataset_hrsod_val] 
+    valid_datasets = [dataset] 
 
     args = get_args_parser()
     net = MaskDecoderHQ(args.model_type) 

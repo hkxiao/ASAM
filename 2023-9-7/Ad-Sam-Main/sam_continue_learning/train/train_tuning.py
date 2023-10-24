@@ -789,7 +789,7 @@ if __name__ == "__main__":
     # valid_datasets = [dataset_ade20k_val]  #2000
     
     #valid_datasets = [dataset_sam_subset_adv_1600]
-    valid_datasets = [dataset_voc2012_val]
+    valid_datasets = [dataset_ade20k_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_sam_subset_adv_1600] 
@@ -797,6 +797,5 @@ if __name__ == "__main__":
     
     args = get_args_parser()
     net = MaskDecoderTL(args.model_type) 
-    #net = torch.compile(net)
     
     main(net, train_datasets, valid_datasets, args)
