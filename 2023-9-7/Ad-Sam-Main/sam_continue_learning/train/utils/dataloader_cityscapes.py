@@ -72,14 +72,12 @@ class CityScapesDataset(Dataset):
         unique_list = sorted(np.unique(naive_gt))
         
         gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
-        #print(im_path,unique_list)
+        
         for i in unique_list:
-            if i == 0:
-                continue
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
             tmp_gt[naive_gt==i]=255
             gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
-
+            
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:

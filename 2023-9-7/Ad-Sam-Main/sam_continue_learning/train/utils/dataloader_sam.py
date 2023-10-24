@@ -75,33 +75,7 @@ class SamDataset(Dataset):
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
             im = np.repeat(im, 3, axis=2)
-        
-        '''
-        json_dict = json.loads(open(gt_path,'r').read())
-        annotations = json_dict['annotations']
-        
-        annotations = sorted(annotations, key=lambda x:x['bbox'][2]*x['bbox'][3], reverse=True)
-        
-        #print(len(annotations))
-        batchsize = self.batch_size_prompt
-        
-        if batchsize == -1: pass
-        elif len(annotations) > batchsize:
-            annotations = annotations[:batchsize]
-        else: 
-            size = len(annotations)
-            for i in range(batchsize - size):
-                annotations.append(annotations[i%size])
-            
-        gt = np.empty((0,json_dict['image']['height'],json_dict['image']['width']))
-        for annotation in annotations:
-            encode_mask = annotation['segmentation']
-            decoded_mask = mask.decode(encode_mask)*255.0
-            gt = np.concatenate((gt,decoded_mask[np.newaxis,:,:]),0)
-        
-        '''
-        
-            
+                
         gt = None
         for i in range(self.batch_size_prompt_start, self.batch_size_prompt_start+self.batch_size_prompt):
             tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
