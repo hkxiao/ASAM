@@ -8,13 +8,13 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 
-dir = '/data/tanglv/data/sam-1b-subset/'
-new_dir = '../sam-1b-subset/'
+dir = '/data/tanglv/data/sam-1b/sa_000001/'
+new_dir = '/data/tanglv/data/sam-1b/sa_000001/'
 
 files = os.listdir(dir)
 Path(new_dir).mkdir(exist_ok=True, parents=True)
 
-for i in tqdm(range(0,11189)):
+for i in tqdm(range(10000,30000)):
     img_file = 'sa_'+str(i)+'.jpg'
     json_file = img_file.replace('jpg', 'json')
     
@@ -30,7 +30,6 @@ for i in tqdm(range(0,11189)):
         decode_mask = mask.decode(encode_mask)*255.0
         decode_mask = decode_mask.astype(np.uint8)
         
-
         cv2.imwrite(os.path.join(new_dir, 'sa_'+str(i), 'segmentation_'+str(j)+'.png'), decode_mask)
         
         

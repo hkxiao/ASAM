@@ -683,6 +683,12 @@ if __name__ == "__main__":
                 "im_ext": ".png",
                 "gt_ext": ".png"}
     
+    dataset_duts_subset = {"name": "duts_subset",
+                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/origin",
+                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
+                "im_ext": ".png",
+                "gt_ext": ".png"}
+    
     
     dataset_sam_subset_ori = {"name": "sam_subset",
                 "im_dir": "/data/tanglv/data/sam-1b-subset",
@@ -696,6 +702,11 @@ if __name__ == "__main__":
             "im_ext": ".png",
             "gt_ext": ""}
     
+    dataset_sam_subset_adv_1600 = {"name": "sam_subset",
+    "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
+    "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+    "im_ext": ".png",
+    "gt_ext": ""}
     
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
         "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
@@ -777,12 +788,15 @@ if __name__ == "__main__":
             }
     
     train_datasets = [dataset_sam_subset_adv]
+    
+    
     # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val,dataset_big_val] 
     # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
-    
-    valid_datasets = [dataset_hrsod_val]
+    valid_datasets = [dataset_sam_subset_adv]
+    #valid_datasets = [dataset_sam_subset_ori]
+    #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_big_val]
     
