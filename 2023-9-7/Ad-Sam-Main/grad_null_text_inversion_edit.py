@@ -32,22 +32,36 @@ CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --be
 
 ############## Initialize #####################
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+
+# model setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
+parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
+
+# grad setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
 parser.add_argument('--gamma', type=float, default=100, help='cnn')
 parser.add_argument('--beta', type=float, default=1, help='cnn')
 parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--norm', type=int, default=2, help='cnn')
-parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
+parser.add_argument('--mu', default=0.5, type=float, help='random seed')
+parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
+
+# base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
-parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
-parser.add_argument('--mu', default=0.5, type=float, help='random seed')
-parser.add_argument('--mae_thd', default=0.8, type=float, help='random seed')
-parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
+
+# path setting
+parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
+parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   
+parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--inversion_dir', default='output/sa_000000-Inversion/embeddings', type=str, help='random seed')   
+parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
+parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')    
+
 args = parser.parse_args()
 print(args)
 
@@ -55,7 +69,6 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 np.random.seed(args.seed)
 torch.Generator().manual_seed(args.seed)
-
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('==> Preparing Model..')

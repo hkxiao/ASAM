@@ -4,14 +4,12 @@ import torch
 import os
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
 from diffusers import DDIMScheduler
-from diffusers import StableDiffusionPipeline
 
 import torch.nn.functional as nnf
 import numpy as np
 import abc
 import ptp_utils
 import seq_aligner
-import shutil
 from torch.optim.adam import Adam
 from PIL import Image
 import time
@@ -23,22 +21,32 @@ from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from skimage.metrics import mean_squared_error as compare_mse
 from pycocotools import mask
 import argparse
-import tensorboardX
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+
+# model setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
-parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
-parser.add_argument('--beta', type=float, default=1, help='cnn')
-parser.add_argument('--eps', type=float, default=0.2, help='cnn')
-parser.add_argument('--steps', type=int, default=10, help='cnn')
-parser.add_argument('--norm', type=int, default=2, help='cnn')
+parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
+parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
+
+
+# base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
-parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
-parser.add_argument('--mu', default=0.5, type=float, help='random seed')
-parser.add_argument('--mae_thd', default=0.8, type=float, help='random seed')
+
+# inversion setting
+parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')   
+parser.add_argument('--guess_mode', action='store_true')   
+parser.add_argument('--guidence_scale', default=7.5, type=float, help='random seed')   
+
+# path setting
+parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   
+parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')    
+parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
+parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')
 args = parser.parse_args()
 
 class LocalBlend:
@@ -96,8 +104,6 @@ class LocalBlend:
 
         
 class EmptyControl:
-    
-    
     def step_callback(self, x_t):
         return x_t
     
@@ -358,29 +364,15 @@ def show_self_attention_comp(attention_store: AttentionStore, res: int, from_whe
         images.append(image)
     ptp_utils.view_images(np.concatenate(images, axis=1), prefix='self_attention')
 
-# def load_512(image_path, left=0, right=0, top=0, bottom=0):
-#     if type(image_path) is str:
-#         image = np.array(Image.open(image_path))[:, :, :3]
-#     else:
-#         image = image_path
-#     h, w, c = image.shape
-#     left = min(left, w-1)
-#     right = min(right, w - left - 1)
-#     top = min(top, h - left - 1)
-#     bottom = min(bottom, h - top - 1)
-#     image = image[top:h-bottom, left:w-right]
-#     h, w, c = image.shape
-#     if h < w:
-#         offset = (w - h) // 2
-#         image = image[:, offset:offset + h]
-#     elif w < h:
-#         offset = (h - w) // 2
-#         image = image[offset:offset + w]
-#     image = np.array(Image.fromarray(image).resize((512, 512)))
-#     return image
-
-
 class NullInversion:
+    def __init__(self, model):
+        scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
+                                  set_alpha_to_one=False)
+        self.model = model
+        self.tokenizer = self.model.tokenizer
+        self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
+        self.prompt = None
+        self.context = None
     
     def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
         prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
@@ -403,14 +395,23 @@ class NullInversion:
         return next_sample
     
     def get_noise_pred_single(self, latents, mask, t, context):
-        down_block_res_samples, mid_block_res_sample = self.model.controlnet(
-                    latents,
-                    t,
-                    encoder_hidden_states=context,
-                    controlnet_cond=mask,
-                    return_dict=False,
-                )
-        # predict the noise residual        
+        if mask != None:
+            down_block_res_samples, mid_block_res_sample = self.model.controlnet(
+                        latents,
+                        t,
+                        encoder_hidden_states=context,
+                        controlnet_cond=mask,
+                        return_dict=False,
+                    )
+        else:
+            down_block_res_samples, mid_block_res_sample = None, None
+        
+        if down_block_res_samples!=None and args.guess_mode and mid_block_res_sample.shape[0]==2:
+            down_block_res_samples = [d[1:] for d in down_block_res_samples]
+            mid_block_res_sample =  mid_block_res_sample[1:]
+            down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
+            mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+                
         noise_pred = self.model.unet(
             latents, t, encoder_hidden_states=context,
             down_block_additional_residuals=down_block_res_samples,
@@ -512,7 +513,10 @@ class NullInversion:
             with torch.no_grad():
                 noise_pred_cond = self.get_noise_pred_single(latent_cur, mask,t, cond_embeddings)
             for j in range(num_inner_steps):
-                noise_pred_uncond = self.get_noise_pred_single(latent_cur, mask, t, uncond_embeddings)
+                if args.guess_mode:
+                    noise_pred_uncond = self.get_noise_pred_single(latent_cur, None, t, uncond_embeddings)
+                else:
+                    noise_pred_uncond = self.get_noise_pred_single(latent_cur, mask, t, uncond_embeddings)
                 
                 noise_pred = noise_pred_uncond + GUIDANCE_SCALE * (noise_pred_cond - noise_pred_uncond)
                 latents_prev_rec = self.prev_step(noise_pred, t, latent_cur)
@@ -534,7 +538,7 @@ class NullInversion:
         bar.close()
         return uncond_embeddings_list
     
-    def invert(self, image_path: str, mask_control: torch.tensor ,prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
+    def invert(self, img_path: str, mask_control: torch.tensor ,prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
         self.init_prompt(prompt)
         ptp_utils.register_attention_control(self.model, None)
         
@@ -549,14 +553,6 @@ class NullInversion:
         uncond_embeddings = self.null_optimization(ddim_latents, mask_control, num_inner_steps, early_stop_epsilon)
         return (image_gt, image_rec), ddim_latents[-1], uncond_embeddings
     
-    def __init__(self, model):
-        scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
-                                  set_alpha_to_one=False)
-        self.model = model
-        self.tokenizer = self.model.tokenizer
-        self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
-        self.prompt = None
-        self.context = None
 
 @torch.no_grad()
 def text2image_ldm_stable(
@@ -573,8 +569,6 @@ def text2image_ldm_stable(
     return_type='image'
 ):
     batch_size = len(prompt)
-    # print(batch_size)
-    # raise NameError
     ptp_utils.register_attention_control(model, controller)
     height = width = 512
     
@@ -602,7 +596,7 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False)
+        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False,guess_mode=args.guess_mode)
         
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
@@ -620,81 +614,87 @@ def run_and_display(prompts, controller, latent=None, mask_control=None, run_bas
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
+
+def check_control_net(pipe):
+    path = '/data/tanglv/data/sam-1b/sa_000000/'
+    id = 1
+    image = Image.open(os.path.join(path,f'sa_{str(id)}.jpg'))
+    control_image = Image.open(os.path.join(path,f'sa_{str(id)}.png'))
     
+    control_image = Image.open('utils/control_demo.png')
+    
+    output = pipe(
+    "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
+    ).images[0]
+    
+    output_numpy = np.array(output)
+    print(type(output),output_numpy.max())
+    output.save('demo_no_gidance.png')
+    #ptp_utils.view_images([output], prefix='debug_few')
+
 
 if __name__ == '__main__':
-    # Load Stable Diffusion
+    # Load Stable Diffusion 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     MY_TOKEN = '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'
     LOW_RESOURCE = False 
-    NUM_DDIM_STEPS = 50
-    GUIDANCE_SCALE = 7.5
+    NUM_DDIM_STEPS = args.ddim_steps
+    GUIDANCE_SCALE = args.guidence_scale
     MAX_NUM_WORDS = 77
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    
-    controlnet = ControlNetModel.from_single_file("pretrained/control_v11p_sd15_mask_sam_v2.pth").to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("./stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-    
+    controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     #check_control_net(ldm_stable)
-    
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
         print("Attribute disable_xformers_memory_efficient_attention() is missing")
     tokenizer = ldm_stable.tokenizer
     null_inversion = NullInversion(ldm_stable)
-
-    # Batch Images Load
-    dataset_dir = 'sam-subset-11187/'
     
-    all_latents = torch.empty(0, 4, 64, 64)
-    all_uncons = torch.empty(0, NUM_DDIM_STEPS, 77, 768)
-
-    avg_ssim, avg_mse, avg_psnr = 0, 0, 0
-    
+    # Load Caption
     captions = {}
-    with open('/data/tanglv/data/sam-1b-subset-blip2-caption.json','r') as f:
+    with open(args.caption_path,'r') as f:
         lines = f.readlines()
         for line in lines:
             json_dict = json.loads(line.strip()) 
             captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
     
-    save_path = '11187-Inversion/'
-    if not os.path.exists(save_path): os.mkdir(save_path)
-    if not os.path.exists(save_path + 'pair'): os.mkdir(save_path + 'pair')
-    if not os.path.exists(save_path + 'embeddings'): os.mkdir(save_path + 'embeddings')
+    # Prepare save dir
+    if not os.path.exists(args.save_root): os.mkdir(args.save_root)
+    if not os.path.exists(os.path.join(args.save_root , 'pair')): os.mkdir(os.path.join(args.save_root , 'pair'))
+    if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
+    # Load img & control mask
     for i in trange(args.start, args.end+1):
-        img_path = dataset_dir + 'sa_'+ str(i) + '.jpg'
-        mask_path = dataset_dir + 'sa_'+ str(i) + '.png'
         
+        img_path = os.path.join(args.data_root, 'sa_'+ str(i) + '.jpg')
+        control_mask_path = os.path.join(args.control_mask_dir, 'sa_'+ str(i) + '.png')
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
-        latent_path = f"{save_path}/embeddings/sa_{i}_latent.pth"
-        uncond_path = f"{save_path}/embeddings/sa_{i}_uncond.pth"
+        latent_path = f"{args.save_root}/embeddings/sa_{i}_latent.pth"
+        uncond_path = f"{args.save_root}/embeddings/sa_{i}_uncond.pth"
         if os.path.exists(latent_path) and os.path.exists(uncond_path):
             print(latent_path, uncond_path, " has existed!")
             continue
         
         prompt = captions[img_path.split('/')[-1]]
-
-        mask_control = cv2.imread(mask_path).astype(np.float32)
+        
+        mask_control = cv2.imread(control_mask_path).astype(np.float32)
         mask_control = cv2.cvtColor(mask_control, cv2.COLOR_BGR2RGB)
         mask_control = cv2.resize(mask_control, (512,512)) / 255.0
         mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
         
         start = time.time()
-        (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, mask_control=mask_control, prompt = prompt, offsets=(0,0,0,0), verbose=True)
+        (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
         print('Inversion Time:', time.time() - start)
         gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)
         
-        torch.save(x_t, f'{save_path}/embeddings/sa_{i}_latent.pth')
-        torch.save(gather_uncond_embeddings, f'{save_path}/embeddings/sa_{i}_uncond.pth')
+        torch.save(x_t, f'{args.save_root}/embeddings/sa_{i}_latent.pth')
+        torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/sa_{i}_uncond.pth')
         
-        # raise NameError
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
-        
-        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{save_path}/pair/sa_{i}')
+        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}')
