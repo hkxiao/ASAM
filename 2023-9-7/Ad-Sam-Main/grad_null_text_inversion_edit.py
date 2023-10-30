@@ -12,15 +12,10 @@ import numpy as np
 import abc
 import ptp_utils
 import seq_aligner
-import shutil
-from torch.optim.adam import Adam
 from PIL import Image
 import time
-import torchvision
 import torch.backends.cudnn as cudnn
-import torchvision.transforms as transforms
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 import cv2
 import json    
 from pycocotools import mask
@@ -33,10 +28,15 @@ CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --be
 ############## Initialize #####################
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
-# model setting
+# sam setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
 parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
+
+# SD setting
+parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
+parser.add_argument('--guess_mode', action='store_true')   
+parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
 
 # grad setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
@@ -46,7 +46,6 @@ parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--norm', type=int, default=2, help='cnn')
 parser.add_argument('--mu', default=0.5, type=float, help='random seed')
-parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
 
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
@@ -476,8 +475,6 @@ def text2image_ldm_stable(
     return_type='image'
 ):
     batch_size = len(prompt)
-    # print(batch_size)
-    # raise NameError
     ptp_utils.register_attention_control(model, controller)
     height = width = 512
     
@@ -607,7 +604,7 @@ def text2image_ldm_stable_last(
                 context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
             else:
                 context = torch.cat([uncond_embeddings_, text_embeddings])
-            latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False)
+            latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False, guess_mode=args.guess_mode)
 
         image = None
         with torch.enable_grad():
@@ -633,7 +630,6 @@ def text2image_ldm_stable_last(
             image_m = image_m / std[None,:,None,None]
             print(k, image_m.max(), image_m.min(), raw_img.max(), raw_img.min())
             loss_mse =  args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
-            #loss_mse = -args.beta * ((image_m-raw_img)**2).mean()
             
             loss = loss_ce - loss_mse
             loss.backward()
@@ -690,7 +686,7 @@ if __name__ == '__main__':
     MY_TOKEN = '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'
     LOW_RESOURCE = False 
     NUM_DDIM_STEPS = args.ddim_steps
-    GUIDANCE_SCALE = 7.5
+    GUIDANCE_SCALE = args.guidance_scale
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -704,13 +700,13 @@ if __name__ == '__main__':
 
     
     # Prepare save path
-    save_path = args.save_root + args.prefix + '-' + str(args.mu) + '-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-' +str(args.alpha) + '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) + '-' + str(args.steps) + '-Clip-' + str(args.eps) + '/'
+    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
     print("Save Path:", save_path)
+    if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(save_path): os.mkdir(save_path)
-    if not os.path.exists(save_path+'pair/'): os.mkdir(save_path+'pair/')
-    if not os.path.exists(save_path+'adv/'): os.mkdir(save_path+'adv/')
-    if not os.path.exists(save_path+'record/'): os.mkdir(save_path+'record/')
-    
+    if not os.path.exists(os.path.join(save_path,'pair')): os.mkdir(os.path.join(save_path,'pair'))
+    if not os.path.exists(os.path.join(save_path,'adv')): os.mkdir(os.path.join(save_path,'adv'))
+    if not os.path.exists(os.path.join(save_path,'record')): os.mkdir(os.path.join(save_path,'record'))
     
     # Load imgs and Caption  
     captions = {}
@@ -763,7 +759,7 @@ if __name__ == '__main__':
         
         if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')):
             print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
-            #continue
+            continue
         
         #control mask    
         mask_control = cv2.imread(control_mask_path)
@@ -778,9 +774,8 @@ if __name__ == '__main__':
         image_inv, x_t, worst_mask, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=mask_control,raw_img=raw_img,annotations=annotations)    
         print('Grad Time:', time.time() - start)
         
-        #ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
-        
-        #ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)))
+        ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
+        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)))
         
         with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
             f.write(str(worst_iou))

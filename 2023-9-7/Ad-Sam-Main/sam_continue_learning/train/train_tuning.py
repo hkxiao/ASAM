@@ -794,7 +794,7 @@ if __name__ == "__main__":
     #valid_datasets = [dataset_sam_subset_ori]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
-    valid_datasets = [dataset_voc2012_val,dataset_ade20k_val,dataset_coco2017_val] 
+    valid_datasets = [dataset_ade20k_val,dataset_coco2017_val] 
     #valid_datasets = [dataset_big_val]
     
     args = get_args_parser()
