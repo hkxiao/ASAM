@@ -618,6 +618,7 @@ def run_and_display(prompts, controller, latent=None, mask_control=None, run_bas
 
 def check_control_net(pipe):
     path = '/data/tanglv/data/sam-1b/sa_000000/'
+<<<<<<< HEAD
     prompt = '"a stairway leading up to a building with ivy growing on it"'
     id = 1    
     control_image = Image.open('utils/control_demo.png')
@@ -638,6 +639,24 @@ def check_control_net(pipe):
     image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=False)
     ptp_utils.view_images([image_inv[0]], prefix=f'demo_check')
     raise NameError
+=======
+    id = 1
+    image = Image.open(os.path.join(path,f'sa_{str(id)}.jpg'))
+    control_image = Image.open(os.path.join(path,f'sa_{str(id)}.png'))
+    
+    control_image = Image.open('utils/control_demo.png')
+    
+    output = pipe(
+    "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
+    ).images[0]
+    
+    output_numpy = np.array(output)
+    print(type(output),output_numpy.max())
+    output.save('demo_no_gidance.png')
+    #ptp_utils.view_images([output], prefix='debug_few')
+
+
+>>>>>>> ccbc2ee0438a0b3613f0c7bdf9075beb0f7d473c
 if __name__ == '__main__':
     # Load Stable Diffusion 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
@@ -649,7 +668,11 @@ if __name__ == '__main__':
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+<<<<<<< HEAD
     check_control_net(ldm_stable)
+=======
+    #check_control_net(ldm_stable)
+>>>>>>> ccbc2ee0438a0b3613f0c7bdf9075beb0f7d473c
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
