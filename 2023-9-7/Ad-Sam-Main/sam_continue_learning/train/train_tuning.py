@@ -578,7 +578,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
             
             if args.baseline:
-                masks = batched_output[0]['masks'].to(torch.float32)
+                masks = batched_output[0]['low_res_logits'].to(torch.float32)
             else:
                 masks = net(
                     image_embeddings=encoder_embedding,
@@ -752,11 +752,6 @@ if __name__ == "__main__":
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
     
-    dataset_coco_subset_val = {"name": "COCO",
-                "im_dir": "/data/tanglv/data/COCO/img",
-                "gt_dir": "/data/tanglv/data/COCO/gt",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
     
     dataset_big_val = {"name": "BIG",
                 "im_dir": "/data/tanglv/data/BIG/test",
@@ -795,11 +790,11 @@ if __name__ == "__main__":
     # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
-    valid_datasets = [dataset_sam_subset_adv]
+    #valid_datasets = [dataset_sam_subset_adv]
     #valid_datasets = [dataset_sam_subset_ori]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
-    #valid_datasets = [dataset_sam_subset_adv_1600] 
+    valid_datasets = [dataset_voc2012_val,dataset_ade20k_val,dataset_coco2017_val] 
     #valid_datasets = [dataset_big_val]
     
     args = get_args_parser()

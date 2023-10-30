@@ -1,1 +1,35 @@
-CUDA_VISIBLE_DEVICES=3 python grad_null_text_inversion_edit.py --start=11000 --end=12000 --model=sam --model_type=vit_b --sam_batch=150 --gamma=1600
+#!/bin/bash
+
+CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
+#CUDA_VISIBLE_DEVICES_LIST=(0)
+now=4000
+interval=500
+
+for id in "${CUDA_VISIBLE_DEVICES_LIST[@]}"
+do
+    echo "Start: ${now}"
+    echo "End $((now + interval))"
+    echo "GPU $id" 
+    export CUDA_VISIBLE_DEVICES=${id} 
+    python grad_null_text_inversion_edit.py \
+    --save_root=output/sa_000000@4-Grad \
+    --data_root=/data/tanglv/data/sam-1b/sa_000000 \
+    --control_mask_dir=/data/tanglv/data/sam-1b/sa_000000/four_mask \
+    --caption_path=/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json \
+    --controlnet_path=ckpt/control_v11p_sd15_mask_sa000000@4.pth \
+    --sam_batch=4 \
+    --model_type=vit_b \
+    --guidance_scale=9.0 \
+    --ddim_steps=20 \
+    --eps=0.2 \
+    --alpha=0.02 \
+    --steps=10 \
+    --mu=0.5 \
+    --gamma=10 \
+    --beta=0.1 \
+    --start=${now} \
+    --end=$((now + interval)) &
+    now=$(expr $now + $interval)
+done
+
+wait

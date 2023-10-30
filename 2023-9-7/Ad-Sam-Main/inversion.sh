@@ -1,2 +1,28 @@
+#!/bin/bash
 
-CUDA_VISIBLE_DEVICES=0 python null_text_inversion_batch_11187_prompts.py --start=1 --end=11187
+CUDA_VISIBLE_DEVICES_LIST=(1)
+#CUDA_VISIBLE_DEVICES_LIST=(0)
+now=10000
+interval=20000
+
+for id in "${CUDA_VISIBLE_DEVICES_LIST[@]}"
+do
+    echo "Start: ${now}"
+    echo "End $((now + interval))"
+    echo "GPU $id" 
+    export CUDA_VISIBLE_DEVICES=${id} 
+    python null_text_inversion.py \
+    --save_root=output/sa_000000@4-Inversion \
+    --data_root=/data/tanglv/data/sam-1b/sa_000000 \
+    --control_mask_dir=/data/tanglv/data/sam-1b/sa_000000/four_mask \
+    --caption_path=/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json \
+    --controlnet_path=ckpt/control_v11p_sd15_mask_sa000000@4.pth \
+    --guidence_scale=9.0 \
+    --steps=10 \
+    --ddim_steps=20 \
+    --start=${now} \
+    --end=$((now + interval))\ &
+    now=$(expr $now + $interval)
+done
+
+wait
