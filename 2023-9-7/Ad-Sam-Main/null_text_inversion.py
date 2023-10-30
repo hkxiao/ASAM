@@ -1,127 +1,57 @@
-import pdb
-import os
-import argparse
-from get_model import get_model
 from typing import Optional, Union, Tuple, List, Callable, Dict
 from tqdm import tqdm, trange
 import torch
-from diffusers import StableDiffusionControlNetPipeline, DDIMScheduler
-from diffusers import ControlNetModel
+import os
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from diffusers import DDIMScheduler
+
 import torch.nn.functional as nnf
 import numpy as np
 import abc
 import ptp_utils
 import seq_aligner
+from torch.optim.adam import Adam
 from PIL import Image
 import time
-import torch.backends.cudnn as cudnn
-import torch.nn.functional as F
+import json
 import cv2
-import json    
+from lavis.models import load_model_and_preprocess
+from skimage.metrics import structural_similarity as compare_ssim
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr
+from skimage.metrics import mean_squared_error as compare_mse
 from pycocotools import mask
-from sam_continue_learning.segment_anything.MyPredictor import SamPredictor
+import argparse
 
-'''
-CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --beta 1 --alpha 0.01 --steps 10  --ddim_steps=50 --norm 2
-'''
-
-############## Initialize #####################
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
-# sam setting
+# model setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
 parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
 
-# SD setting
-parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
-parser.add_argument('--guess_mode', action='store_true')   
-parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
-
-# grad setting
-parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
-parser.add_argument('--gamma', type=float, default=100, help='cnn')
-parser.add_argument('--beta', type=float, default=1, help='cnn')
-parser.add_argument('--eps', type=float, default=0.2, help='cnn')
-parser.add_argument('--steps', type=int, default=10, help='cnn')
-parser.add_argument('--norm', type=int, default=2, help='cnn')
-parser.add_argument('--mu', default=0.5, type=float, help='random seed')
 
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
 
+# inversion setting
+parser.add_argument('--steps', type=int, default=10, help='cnn')
+parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')   
+parser.add_argument('--guess_mode', action='store_true')   
+parser.add_argument('--guidence_scale', default=7.5, type=float, help='random seed')   
+
 # path setting
-parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
 parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   
-parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
-parser.add_argument('--inversion_dir', default='output/sa_000000-Inversion/embeddings', type=str, help='random seed')   
+parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')    
 parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
-parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')    
-
+parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')
 args = parser.parse_args()
 print(args)
 
-torch.manual_seed(args.seed)
-torch.cuda.manual_seed(args.seed)
-np.random.seed(args.seed)
-torch.Generator().manual_seed(args.seed)
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print('==> Preparing Model..')
-image_size = (1024, 1024)
-
-if args.model == 'vit' or args.model == 'adv_resnet152_denoise':
-    print('Using 0.5 Nor...')
-    mean = [0.5, 0.5, 0.5]
-    std = [0.5, 0.5, 0.5]
-elif args.model == 'mvit':
-    mean = [0, 0, 0]
-    std = [1, 1, 1] 
-    image_size = (320, 320)
-else:
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
-
-mean = torch.Tensor(mean).cuda()
-std = torch.Tensor(std).cuda()
-
-net = get_model(args.model, args.model_type)
-if device == 'cuda':
-    net.to(device)
-    cudnn.benchmark = True
-net.eval()
-net.cuda()
-
-if args.model == 'sam':
-    net = SamPredictor(net)
-
-def str2img(value):
-    width, height = 512, 512
-    background_color = (255, 255, 255)  # 白色背景
-    image = cv2.UMat(np.ones((height, width, 3), dtype=np.uint8) * background_color)
-    
-    # 在图像上绘制文本
-    text = "worst_iou: " + str(value)
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 1.0
-    text_color = (0, 0, 0)  # 黑色文本颜色
-    thickness = 1
-
-    # 获取文本的尺寸
-    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-    x = (width - text_size[0]) // 2  # 计算文本的起始x坐标
-    y = (height + text_size[1]) // 2  # 计算文本的起始y坐标
-
-    # 在图像上绘制文本
-    cv2.putText(image, text, (x, y), font, font_scale, text_color, thickness)
-
-    return image.get()
-
-
 class LocalBlend:
+    
     def get_mask(self, maps, alpha, use_pool):
         k = 1
         maps = (maps * alpha).sum(-1).mean(1)
@@ -173,7 +103,7 @@ class LocalBlend:
         self.counter = 0 
         self.th=th
 
-
+        
 class EmptyControl:
     def step_callback(self, x_t):
         return x_t
@@ -184,30 +114,6 @@ class EmptyControl:
     def __call__(self, attn, is_cross: bool, place_in_unet: str):
         return attn
 
-
-@torch.no_grad()
-def compute_iou(preds, target): #[N 1 h w] [-1 1] [0 1]
-    def mask_iou(pred_label,label):
-        '''
-        calculate mask iou for pred_label and gt_label
-        '''
-
-        pred_label = (pred_label>0)[0].int()
-        label = (label>0.5)[0].int()
-
-        intersection = ((label * pred_label) > 0).sum()
-        union = ((label + pred_label) > 0).sum()
-        return intersection / union
-    
-    assert target.shape[1] == 1, 'only support one mask per image now'
-    if(preds.shape[2]!=target.shape[2] or preds.shape[3]!=target.shape[3]):
-        postprocess_preds = F.interpolate(preds, size=target.size()[2:], mode='bilinear', align_corners=False)
-    else:
-        postprocess_preds = preds
-    iou = 0
-    for i in range(0,len(preds)):
-        iou = iou + mask_iou(postprocess_preds[i],target[i])
-    return iou / len(preds)
     
 class AttentionControl(abc.ABC):
     
@@ -459,6 +365,195 @@ def show_self_attention_comp(attention_store: AttentionStore, res: int, from_whe
         images.append(image)
     ptp_utils.view_images(np.concatenate(images, axis=1), prefix='self_attention')
 
+class NullInversion:
+    def __init__(self, model):
+        scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False,
+                                  set_alpha_to_one=False)
+        self.model = model
+        self.tokenizer = self.model.tokenizer
+        self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
+        self.prompt = None
+        self.context = None
+    
+    def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+        prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
+        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
+        beta_prod_t = 1 - alpha_prod_t
+        pred_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+        pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
+        prev_sample = alpha_prod_t_prev ** 0.5 * pred_original_sample + pred_sample_direction
+        return prev_sample
+    
+    def next_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+        timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep] if timestep >= 0 else self.scheduler.final_alpha_cumprod
+        alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep]
+        beta_prod_t = 1 - alpha_prod_t
+        next_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+        next_sample_direction = (1 - alpha_prod_t_next) ** 0.5 * model_output
+        next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
+        return next_sample
+    
+    def get_noise_pred_single(self, latents, mask, t, context):
+        if mask != None:
+            down_block_res_samples, mid_block_res_sample = self.model.controlnet(
+                        latents,
+                        t,
+                        encoder_hidden_states=context,
+                        controlnet_cond=mask,
+                        return_dict=False,
+                    )
+        else:
+            down_block_res_samples, mid_block_res_sample = None, None
+        
+        if down_block_res_samples!=None and args.guess_mode and mid_block_res_sample.shape[0]==2:
+            down_block_res_samples = [d[1:] for d in down_block_res_samples]
+            mid_block_res_sample =  mid_block_res_sample[1:]
+            down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
+            mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+                
+        noise_pred = self.model.unet(
+            latents, t, encoder_hidden_states=context,
+            down_block_additional_residuals=down_block_res_samples,
+            mid_block_additional_residual=mid_block_res_sample,)["sample"]
+        return noise_pred
+
+    def get_noise_pred(self, latents, mask, t, is_forward=True, context=None):
+        latents_input = torch.cat([latents] * 2)
+        if context is None:
+            context = self.context
+        guidance_scale = 1 if is_forward else GUIDANCE_SCALE
+        # print(latents_input.shape, mask.shape, context.shape)
+        noise_pred = self.get_noise_pred_single(latents_input, mask, t, context)
+        
+        noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
+        if is_forward:
+            latents = self.next_step(noise_pred, t, latents)
+        else:
+            latents = self.prev_step(noise_pred, t, latents)
+        return latents
+
+    @torch.no_grad()
+    def latent2image(self, latents, return_type='np'):
+        latents = 1 / 0.18215 * latents.detach()
+        image = self.model.vae.decode(latents)['sample']
+        if return_type == 'np':
+            image = (image / 2 + 0.5).clamp(0, 1)
+            image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
+            image = (image * 255).astype(np.uint8)
+        return image
+
+    @torch.no_grad()
+    def image2latent(self, image):
+        with torch.no_grad():
+            if type(image) is Image:
+                image = np.array(image)
+            if type(image) is torch.Tensor and image.dim() == 4:
+                latents = image
+            else:
+                image = torch.from_numpy(image).float() / 127.5 - 1
+                image = image.permute(2, 0, 1).unsqueeze(0).to(device)
+                latents = self.model.vae.encode(image)['latent_dist'].mean
+                latents = latents * 0.18215
+        return latents
+
+    @torch.no_grad()
+    def init_prompt(self, prompt: str):
+        uncond_input = self.model.tokenizer(
+            [""], padding="max_length", max_length=self.model.tokenizer.model_max_length,
+            return_tensors="pt"
+        )
+        uncond_embeddings = self.model.text_encoder(uncond_input.input_ids.to(self.model.device))[0]
+        text_input = self.model.tokenizer(
+            [prompt],
+            padding="max_length",
+            max_length=self.model.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        text_embeddings = self.model.text_encoder(text_input.input_ids.to(self.model.device))[0]
+        self.context = torch.cat([uncond_embeddings, text_embeddings])
+        self.prompt = prompt
+
+    @torch.no_grad()
+    def ddim_loop(self, latent, mask):
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        all_latent = [latent]
+        latent = latent.clone().detach()
+        for i in range(NUM_DDIM_STEPS):
+            t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
+            noise_pred = self.get_noise_pred_single(latent, mask,t, cond_embeddings)
+            latent = self.next_step(noise_pred ,t, latent)
+            all_latent.append(latent)
+        return all_latent
+
+    @property
+    def scheduler(self):
+        return self.model.scheduler
+
+    @torch.no_grad()
+    def ddim_inversion(self, image, mask):
+        latent = self.image2latent(image)
+        image_rec = self.latent2image(latent)
+        ddim_latents = self.ddim_loop(latent, mask)
+        return image_rec, ddim_latents
+
+    def null_optimization(self, latents, mask, num_inner_steps, epsilon):
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        uncond_embeddings_list = []
+        latent_cur = latents[-1]
+        bar = tqdm(total=num_inner_steps * NUM_DDIM_STEPS)
+        for i in range(NUM_DDIM_STEPS):
+            uncond_embeddings = uncond_embeddings.clone().detach()
+            uncond_embeddings.requires_grad = True
+            optimizer = Adam([uncond_embeddings], lr=1e-2 * (1. - i / 100.))
+            latent_prev = latents[len(latents) - i - 2]
+            t = self.model.scheduler.timesteps[i]
+            with torch.no_grad():
+                noise_pred_cond = self.get_noise_pred_single(latent_cur, mask,t, cond_embeddings)
+            for j in range(num_inner_steps):
+                if args.guess_mode:
+                    noise_pred_uncond = self.get_noise_pred_single(latent_cur, None, t, uncond_embeddings)
+                else:
+                    noise_pred_uncond = self.get_noise_pred_single(latent_cur, mask, t, uncond_embeddings)
+                
+                noise_pred = noise_pred_uncond + GUIDANCE_SCALE * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec = self.prev_step(noise_pred, t, latent_cur)
+                loss = nnf.mse_loss(latents_prev_rec, latent_prev)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                loss_item = loss.item()
+                bar.update()
+                if loss_item < epsilon + i * 2e-5:
+                    break
+            for j in range(j + 1, num_inner_steps):
+                bar.update()
+            uncond_embeddings_list.append(uncond_embeddings[:1].detach())
+            with torch.no_grad():
+                context = torch.cat([uncond_embeddings, cond_embeddings])
+                masks = torch.cat([mask,mask])
+                latent_cur = self.get_noise_pred(latent_cur, masks, t, False, context)
+        bar.close()
+        return uncond_embeddings_list
+    
+    def invert(self, img_path: str, mask_control: torch.tensor ,prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt = np.array(image_gt).astype(np.float32)
+        
+        if verbose:
+            print("DDIM inversion...")
+        image_rec, ddim_latents = self.ddim_inversion(image_gt, mask_control)
+        if verbose:
+            print("Null-text optimization...")
+        uncond_embeddings = self.null_optimization(ddim_latents, mask_control, num_inner_steps, early_stop_epsilon)
+        return (image_gt, image_rec), ddim_latents[-1], uncond_embeddings
+    
 
 @torch.no_grad()
 def text2image_ldm_stable(
@@ -502,13 +597,14 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False)
+        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False,guess_mode=args.guess_mode)
         
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
     else:
         image = latents
     return image, latent
+
 
 def run_and_display(prompts, controller, latent=None, mask_control=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
     if run_baseline:
@@ -520,195 +616,48 @@ def run_and_display(prompts, controller, latent=None, mask_control=None, run_bas
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
 
-def limitation01(y):
-    idx = (y > 1)
-    y[idx] = (torch.tanh(1000*(y[idx]-1))+10000)/10001
-    idx = (y < 0)
-    y[idx] = (torch.tanh(1000*(y[idx])))/10000
-    return y
-
-@torch.no_grad()
-def text2image_ldm_stable_last(
-    model,
-    prompt:  List[str],
-    controller,
-    num_inference_steps: int = 50,
-    guidance_scale: Optional[float] = 7.5,
-    generator: Optional[torch.Generator] = None,
-    latent: Optional[torch.FloatTensor] = None,
-    uncond_embeddings=None,
-    start_time=50,
-    boxes=None,
-    mask_label=None,
-    mask_control=None,
-    raw_img=None,
-    annotations=None,
-):
+def check_control_net(pipe):
+    path = '/data/tanglv/data/sam-1b/sa_000000/'
+    prompt = '"a stairway leading up to a building with ivy growing on it"'
+    id = 1    
+    control_image = Image.open('utils/control_demo.png')
     
-    batch_size = len(prompt)
-    ptp_utils.register_attention_control(model, controller)
-    height = width = 512
+    # output = pipe(
+    # "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
+    # ).images[0]
     
-    text_input = model.tokenizer(
-        prompt,
-        padding="max_length",
-        max_length=model.tokenizer.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-    )
-    text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
-    max_length = text_input.input_ids.shape[-1]
-    if uncond_embeddings is None:
-        uncond_input = model.tokenizer(
-            [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
-        )
-        uncond_embeddings_ = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
-    else:
-        uncond_embeddings_ = None
+    # output_numpy = np.array(output)
+    # print(type(output),output_numpy.max())
+    # output.save('demo_no_gidance.png')
 
-    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)
-    print("Latent", latent.shape, "Latents", latents.shape) # [1 4 64 64]
-
-    model.scheduler.set_timesteps(num_inference_steps)
-
-    best_latent = latents
-    ori_latents = latents.clone().detach()
-    adv_latents = latents.clone().detach()
-    print(latents.max(), latents.min())
-    momentum = 0
-    worst_iou = 1.0
-    worst_mask = None
-    
-    origin_width, origin_height = info_dict['image']['width'], info_dict['image']['height']
-    boxes = torch.empty(0,4).cuda()
-    mask_labels = torch.empty(0,1,256,256).cuda() 
-    
-    for i, annotation in enumerate(annotations):
-        encode_mask = annotation['segmentation']
-        decoded_mask = mask.decode(encode_mask)
-        mask_label = cv2.resize(decoded_mask, (256,256))
-        mask_label = torch.from_numpy(mask_label).to(torch.float32).cuda().unsqueeze(0).unsqueeze(0)
-        mask_labels = torch.concat([mask_labels, mask_label])
-        
-        x, y, w, h = annotation['bbox']
-        x_min, y_min = 1024 * x / origin_width, 1024 * y / origin_height
-        x_max, y_max = 1024 * (x + w) / origin_width, 1024 * (y + h) / origin_height
-        box =  torch.tensor([[x_min, y_min, x_max, y_max]], device=device, dtype=torch.float32)
-        boxes = torch.concat([boxes, box]) 
-    
-    for k in range(args.steps):
-        latents = adv_latents
-        for i, t in enumerate(model.scheduler.timesteps[-start_time:]):
-            # print(i, t)
-            if uncond_embeddings_ is None:
-                context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
-            else:
-                context = torch.cat([uncond_embeddings_, text_embeddings])
-            latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False, guess_mode=args.guess_mode)
-
-        image = None
-        with torch.enable_grad():
-            latents_last = latents.detach().clone()
-            latents_last.requires_grad = True
-            latents_t = (1 / 0.18215 * latents_last)
-            image = model.vae.decode(latents_t)['sample']
-            image = (image / 2 + 0.5)
-            #print(4, image.max(), image.min())
-            image = limitation01(image)
-            image_m = F.interpolate(image, image_size)
-            #print(1, image_m.max(), image_m.min())
-            net.set_torch_image(image_m*255.0,original_image_size=(1024,1024))
-                        
-            ad_masks, ad_iou_predictions, ad_low_res_logits = net.predict_torch(point_coords=None,point_labels=None,boxes=boxes,multimask_output=False)
-            loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits,mask_labels) 
-        
-            iou = compute_iou(ad_low_res_logits, mask_labels).item()
-            if iou < worst_iou:                
-                best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
-                    
-            image_m = image_m - mean[None,:,None,None]
-            image_m = image_m / std[None,:,None,None]
-            print(k, image_m.max(), image_m.min(), raw_img.max(), raw_img.min())
-            loss_mse =  args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
-            
-            loss = loss_ce - loss_mse
-            loss.backward()
-            print('*' * 50)
-            print('Loss', loss.item(),'Loss_ce', loss_ce.item(), 'Loss_mse', loss_mse.item())
-            print(k, 'Predicted:', loss)
-            print('Grad:', latents_last.grad.min(), latents_last.grad.max())
-            # print(latent.min(), latent.max())
-        
-        l1_grad = latents_last.grad / torch.norm(latents_last.grad, p=1)
-        print('L1 Grad:', l1_grad.min(), l1_grad.max())
-        momentum = args.mu * momentum + l1_grad
-        adv_latents = adv_latents + torch.sign(momentum) * args.alpha
-        noise = (adv_latents - ori_latents).clamp(-args.eps, args.eps)
-        adv_latents = ori_latents + noise
-        latents = adv_latents.detach()
-
-    # Return Best Attack
-    latents = best_latent
-    for i, t in enumerate(model.scheduler.timesteps[-start_time:]):
-        # print(i, t)
-        if uncond_embeddings_ is None:
-            context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
-        else:
-            context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control,context, t, guidance_scale, low_resource=False)
-        
-    latents = (1 / 0.18215 * latents)
-    image = model.vae.decode(latents)['sample']
-    image = (image / 2 + 0.5)
-    print(4, image.max(), image.min())
-    image = limitation01(image)
-    print(2, image.max(), image.min())
-
-    image = image.clamp(0, 1).detach().cpu().permute(0, 2, 3, 1).numpy()
-    image = (image * 255).astype(np.uint8)
-    
-    worst_mask_show = np.zeros((512,512,3))
-    if args.steps:
-        num = origin_len
-        length = 1<<24
-        for i, single_mask in enumerate(worst_mask):
-            single_mask = single_mask[0].cpu().numpy()
-            pos = (length-1) *(i+1) / num
-            color = (pos%256, pos//256%256, pos//(1<<16))
-            worst_mask_show[single_mask!=0] = color
-    
-    return image, best_latent, worst_mask_show, worst_iou
-
-
+    control_image = np.array(control_image)
+    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
+    controller = AttentionStore()
+    x_t = torch.randn((1, pipe.unet.in_channels,  512// 8, 512 // 8))
+    image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=False)
+    ptp_utils.view_images([image_inv[0]], prefix=f'demo_check')
+    raise NameError
 if __name__ == '__main__':
-    # Load Stable Diffusion & ControlNet
+    # Load Stable Diffusion 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     MY_TOKEN = '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'
     LOW_RESOURCE = False 
     NUM_DDIM_STEPS = args.ddim_steps
-    GUIDANCE_SCALE = args.guidance_scale
+    GUIDANCE_SCALE = args.guidence_scale
     MAX_NUM_WORDS = 77
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-
+    check_control_net(ldm_stable)
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
         print("Attribute disable_xformers_memory_efficient_attention() is missing")
-
+    tokenizer = ldm_stable.tokenizer
+    null_inversion = NullInversion(ldm_stable)
     
-    # Prepare save path
-    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
-    print("Save Path:", save_path)
-    if not os.path.exists(args.save_root): os.mkdir(args.save_root)
-    if not os.path.exists(save_path): os.mkdir(save_path)
-    if not os.path.exists(os.path.join(save_path,'pair')): os.mkdir(os.path.join(save_path,'pair'))
-    if not os.path.exists(os.path.join(save_path,'adv')): os.mkdir(os.path.join(save_path,'adv'))
-    if not os.path.exists(os.path.join(save_path,'record')): os.mkdir(os.path.join(save_path,'record'))
-    
-    # Load imgs and Caption  
+    # Load Caption
     captions = {}
     with open(args.caption_path,'r') as f:
         lines = f.readlines()
@@ -716,66 +665,41 @@ if __name__ == '__main__':
             json_dict = json.loads(line.strip()) 
             captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
     
+    # Prepare save dir
+    if not os.path.exists(args.save_root): os.mkdir(args.save_root)
+    if not os.path.exists(os.path.join(args.save_root , 'pair')): os.mkdir(os.path.join(args.save_root , 'pair'))
+    if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
+    
+    # Load img & control mask
     for i in trange(args.start, args.end+1):
-        img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
-        control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
-        json_path = args.data_root+'/'+'sa_'+str(i)+'.json'
         
+        img_path = os.path.join(args.data_root, 'sa_'+ str(i) + '.jpg')
+        control_mask_path = os.path.join(args.control_mask_dir, 'sa_'+ str(i) + '.png')
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
-        # raw img for mse [1,3,512,512] [0,1]
-        pil_image = Image.open(img_path).convert('RGB').resize(image_size)
-        raw_img_show = np.array(pil_image.resize((512,512)))
-        raw_img = (torch.tensor(np.array(pil_image).astype(np.float32), device=device).unsqueeze(0)/255.).permute(0,3, 1, 2)
-        raw_img = raw_img - mean[None,:,None,None]
-        raw_img = raw_img / std[None,:,None,None]
+        latent_path = f"{args.save_root}/embeddings/sa_{i}_latent.pth"
+        uncond_path = f"{args.save_root}/embeddings/sa_{i}_uncond.pth"
+        if os.path.exists(latent_path) and os.path.exists(uncond_path):
+            print(latent_path, uncond_path, " has existed!")
+            continue
         
-        # annotation json
-        global info_dict, origin_len
-        info_dict = json.loads(open(json_path).read())
-        annotations = info_dict['annotations']
-        annotations = sorted(annotations, key=lambda x: x['bbox'][2]*x['bbox'][3], reverse=True)
-        origin_len = len(annotations)
-        if len(annotations) > args.sam_batch:
-            annotations = annotations[:args.sam_batch]
-        print("========> batchsize:",len(annotations))
-        
-        # caption
         prompt = captions[img_path.split('/')[-1]]
-        print(prompt)
         
-        #x_t & uncondition embeddings 
-        latent_path = f"{args.inversion_dir}/sa_{i}_latent.pth"
-        uncond_path = f"{args.inversion_dir}/sa_{i}_uncond.pth"
-        
-        if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
-            print(latent_path, uncond_path, "do not exist!")
-            continue
-        else:
-            x_t = torch.load(latent_path).cuda()
-            uncond_embeddings = torch.load(uncond_path).cuda()
-        
-        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')):
-            print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
-            continue
-        
-        #control mask    
-        mask_control = cv2.imread(control_mask_path)
+        mask_control = cv2.imread(control_mask_path).astype(np.float32)
         mask_control = cv2.cvtColor(mask_control, cv2.COLOR_BGR2RGB)
-        mask_control = cv2.resize(mask_control, (512,512))
-        mask_show = mask_control.copy()
-        mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda() / 255.0
+        mask_control = cv2.resize(mask_control, (512,512)) / 255.0
+        mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
         
-        controller = EmptyControl()
+        start = time.time()
+        (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
+        print('Inversion Time:', time.time() - start)
+        gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)
         
-        start = time.time()            
-        image_inv, x_t, worst_mask, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=mask_control,raw_img=raw_img,annotations=annotations)    
-        print('Grad Time:', time.time() - start)
+        torch.save(x_t, f'{args.save_root}/embeddings/sa_{i}_latent.pth')
+        torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/sa_{i}_uncond.pth')
         
-        ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
-        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)))
-        
-        with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
-            f.write(str(worst_iou))
+        controller = AttentionStore()
+        image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
+        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}')

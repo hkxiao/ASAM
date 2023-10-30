@@ -200,7 +200,7 @@ class LargeScaleJitter(object):
         
         scaled_image = torch.squeeze(F.interpolate(torch.unsqueeze(image,0),scaled_size.tolist(),mode='bilinear'),dim=0)
         scaled_label = torch.squeeze(F.interpolate(torch.unsqueeze(label,0),scaled_size.tolist(),mode='bilinear'),dim=0)
-        
+
         # random crop
         crop_size = (min(self.desired_size, scaled_size[0]), min(self.desired_size, scaled_size[1]))
 

@@ -578,7 +578,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
             
             if args.baseline:
-                masks = batched_output[0]['masks'].to(torch.float32)
+                masks = batched_output[0]['low_res_logits'].to(torch.float32)
             else:
                 masks = net(
                     image_embeddings=encoder_embedding,
@@ -587,9 +587,8 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     dense_prompt_embeddings=dense_embeddings,
                     multimask_output=False,
                 )
-
-            # print(masks.shape, labels_ori.shape)
-            # raise NameError
+                masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
+        
             iou = compute_iou(masks,labels_ori.unsqueeze(1))
             boundary_iou = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
 
@@ -708,6 +707,13 @@ if __name__ == "__main__":
         "im_ext": ".png",
         "gt_ext": ""}
     
+    dataset_sam_subset_adv_4 = {"name": "sam_subset",
+        "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
+        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""}
+    
+            
     
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
         "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
@@ -788,19 +794,23 @@ if __name__ == "__main__":
             "im_ext": ".jpg"
             }
     
-    train_datasets = [dataset_sam_subset_adv]
+    train_datasets = [dataset_sam_subset_adv_4]
     
     
     # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val,dataset_big_val] 
-    # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
+    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
-    valid_datasets = [dataset_sam_subset_adv]
+    # valid_datasets = [dataset_sam_subset_adv]
     #valid_datasets = [dataset_sam_subset_ori]
+    valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val]
+    #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_sam_subset_adv_1600] 
     #valid_datasets = [dataset_big_val]
+    
+    #valid_datasets = train_datasets
     
     args = get_args_parser()
     net = MaskDecoderTL(args.model_type) 
