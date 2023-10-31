@@ -34,6 +34,8 @@ parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
+parser.add_argument('--check_controlnet', action='store_true')
+parser.add_argument('--check_inversion', action='store_true')
 
 # inversion setting
 parser.add_argument('--steps', type=int, default=10, help='cnn')
@@ -616,47 +618,42 @@ def run_and_display(prompts, controller, latent=None, mask_control=None, run_bas
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
 
-def check_control_net(pipe):
-    path = '/data/tanglv/data/sam-1b/sa_000000/'
-<<<<<<< HEAD
-    prompt = '"a stairway leading up to a building with ivy growing on it"'
+def check_controlnet():
     id = 1    
-    control_image = Image.open('utils/control_demo.png')
-    
-    # output = pipe(
-    # "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
-    # ).images[0]
-    
-    # output_numpy = np.array(output)
-    # print(type(output),output_numpy.max())
-    # output.save('demo_no_gidance.png')
+    prompt = captions[f'sa_{str(id)}.jpg']
 
+    control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     control_image = np.array(control_image)
     control_image = cv2.resize(control_image, (512,512)) / 255.0
-    control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
-    controller = AttentionStore()
-    x_t = torch.randn((1, pipe.unet.in_channels,  512// 8, 512 // 8))
-    image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=False)
-    ptp_utils.view_images([image_inv[0]], prefix=f'demo_check')
-    raise NameError
-=======
-    id = 1
-    image = Image.open(os.path.join(path,f'sa_{str(id)}.jpg'))
-    control_image = Image.open(os.path.join(path,f'sa_{str(id)}.png'))
     
-    control_image = Image.open('utils/control_demo.png')
-    
-    output = pipe(
+    output = ldm_stable(
     "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
     ).images[0]
     
     output_numpy = np.array(output)
     print(type(output),output_numpy.max())
-    output.save('demo_no_gidance.png')
-    #ptp_utils.view_images([output], prefix='debug_few')
+    output.save('check_controlnet_pth.png')
+    
+    controller = AttentionStore()
+    x_t = torch.randn((1, ldm_stable.unet.in_channels,  512// 8, 512 // 8))
+    run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=True, prefix='check_controlnet_use')
 
+def check_inversion():
+    id = 1    
+    prompt = captions[f'sa_{str(id)}.jpg']
 
->>>>>>> ccbc2ee0438a0b3613f0c7bdf9075beb0f7d473c
+    latent_path = f"{args.inversion_dir}/sa_{str(id)}_latent.pth"
+    uncond_path = f"{args.inversion_dir}/sa_{str(id)}_uncond.pth"
+    x_t = torch.load(latent_path).cuda()
+    uncond_embeddings = torch.load(uncond_path).cuda()
+    
+    control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
+    control_image = np.array(control_image)
+    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
+    controller = AttentionStore()
+    
+    run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=uncond_embeddings, verbose=True, prefix='check_inversion')
 if __name__ == '__main__':
     # Load Stable Diffusion 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
@@ -668,16 +665,13 @@ if __name__ == '__main__':
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-<<<<<<< HEAD
-    check_control_net(ldm_stable)
-=======
-    #check_control_net(ldm_stable)
->>>>>>> ccbc2ee0438a0b3613f0c7bdf9075beb0f7d473c
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
         print("Attribute disable_xformers_memory_efficient_attention() is missing")
     tokenizer = ldm_stable.tokenizer
+    
+    # Load null text inversion
     null_inversion = NullInversion(ldm_stable)
     
     # Load Caption
@@ -687,42 +681,55 @@ if __name__ == '__main__':
         for line in lines:
             json_dict = json.loads(line.strip()) 
             captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
+            
+    # Check controlnet & inversion
+    if args.check_controlnet: check_controlnet()
+    if args.check_inversion: check_inversion()
+    if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save dir
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(os.path.join(args.save_root , 'pair')): os.mkdir(os.path.join(args.save_root , 'pair'))
     if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
-    # Load img & control mask
+    # Inversion loop
     for i in trange(args.start, args.end+1):
         
+        # prepare img & control mask path
         img_path = os.path.join(args.data_root, 'sa_'+ str(i) + '.jpg')
         control_mask_path = os.path.join(args.control_mask_dir, 'sa_'+ str(i) + '.png')
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
+        # init x_t & uncond_emb
         latent_path = f"{args.save_root}/embeddings/sa_{i}_latent.pth"
         uncond_path = f"{args.save_root}/embeddings/sa_{i}_uncond.pth"
         if os.path.exists(latent_path) and os.path.exists(uncond_path):
             print(latent_path, uncond_path, " has existed!")
             continue
         
+        # load catpion
         prompt = captions[img_path.split('/')[-1]]
+        print(prompt)
         
+        # load control mask
         mask_control = cv2.imread(control_mask_path).astype(np.float32)
         mask_control = cv2.cvtColor(mask_control, cv2.COLOR_BGR2RGB)
         mask_control = cv2.resize(mask_control, (512,512)) / 255.0
         mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
         
+        # null text inversion
         start = time.time()
         (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
         print('Inversion Time:', time.time() - start)
         gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)
         
+        # save x_t & uncond_emb
         torch.save(x_t, f'{args.save_root}/embeddings/sa_{i}_latent.pth')
         torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/sa_{i}_uncond.pth')
         
+        # show 
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
         ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}')

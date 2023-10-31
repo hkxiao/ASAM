@@ -2,7 +2,7 @@ import pdb
 import os
 import argparse
 from get_model import get_model
-from typing import Optional, Union, Tuple, List, Callable, Dict
+from typing import Optional, Union, Tuple, List, Dict
 from tqdm import tqdm, trange
 import torch
 from diffusers import StableDiffusionControlNetPipeline, DDIMScheduler
@@ -18,8 +18,8 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import cv2
 import json    
-from pycocotools import mask
 from sam_continue_learning.segment_anything.MyPredictor import SamPredictor
+from tqdm import tqdm
 
 '''
 CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --beta 1 --alpha 0.01 --steps 10  --ddim_steps=50 --norm 2
@@ -51,6 +51,8 @@ parser.add_argument('--mu', default=0.5, type=float, help='random seed')
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
+parser.add_argument('--check_controlnet', action='store_true')
+parser.add_argument('--check_inversion', action='store_true')
 
 # path setting
 parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
@@ -120,6 +122,46 @@ def str2img(value):
 
     return image.get()
 
+def masks_to_boxes(masks):
+    """Compute the bounding boxes around the provided masks
+
+    The masks should be in format [N, H, W] where N is the number of masks, (H, W) are the spatial dimensions.
+
+    Returns a [N, 4] tensors, with the boxes in xyxy format
+    """
+    if masks.numel() == 0:
+        return torch.zeros((0, 4), device=masks.device)
+    
+    h, w = masks.shape[-2:]
+
+    y = torch.arange(0, h, dtype=torch.float)
+    x = torch.arange(0, w, dtype=torch.float)
+    y, x = torch.meshgrid(y, x)
+    y = y.to(masks)
+    x = x.to(masks)
+
+    x_mask = ((masks>128) * x.unsqueeze(0))
+    x_max = x_mask.flatten(1).max(-1)[0]
+    x_min = x_mask.masked_fill(~(masks>128), 1e8).flatten(1).min(-1)[0]
+
+    y_mask = ((masks>128) * y.unsqueeze(0))
+    y_max = y_mask.flatten(1).max(-1)[0]
+    y_min = y_mask.masked_fill(~(masks>128), 1e8).flatten(1).min(-1)[0]
+
+    return torch.stack([x_min, y_min, x_max, y_max], 1)
+
+def show_res(mask, ax, random_color=False):
+    if random_color:
+        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    else:
+        color = np.array([30/255, 144/255, 255/255, 0.6])
+    h, w = mask.shape[-2:]
+    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    ax.imshow(mask_image)
+
+    x0, y0 = box[0], box[1]
+    w, h = box[2] - box[0], box[3] - box[1]
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))  
 
 class LocalBlend:
     def get_mask(self, maps, alpha, use_pool):
@@ -193,7 +235,7 @@ def compute_iou(preds, target): #[N 1 h w] [-1 1] [0 1]
         '''
 
         pred_label = (pred_label>0)[0].int()
-        label = (label>0.5)[0].int()
+        label = (label>128)[0].int()
 
         intersection = ((label * pred_label) > 0).sum()
         union = ((label + pred_label) > 0).sum()
@@ -502,7 +544,7 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False)
+        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False, guess_mode=args.guess_mode)
         
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
@@ -539,10 +581,9 @@ def text2image_ldm_stable_last(
     uncond_embeddings=None,
     start_time=50,
     boxes=None,
-    mask_label=None,
+    label_masks_256=None,
     mask_control=None,
     raw_img=None,
-    annotations=None,
 ):
     
     batch_size = len(prompt)
@@ -578,28 +619,9 @@ def text2image_ldm_stable_last(
     momentum = 0
     worst_iou = 1.0
     worst_mask = None
-    
-    origin_width, origin_height = info_dict['image']['width'], info_dict['image']['height']
-    boxes = torch.empty(0,4).cuda()
-    mask_labels = torch.empty(0,1,256,256).cuda() 
-    
-    for i, annotation in enumerate(annotations):
-        encode_mask = annotation['segmentation']
-        decoded_mask = mask.decode(encode_mask)
-        mask_label = cv2.resize(decoded_mask, (256,256))
-        mask_label = torch.from_numpy(mask_label).to(torch.float32).cuda().unsqueeze(0).unsqueeze(0)
-        mask_labels = torch.concat([mask_labels, mask_label])
-        
-        x, y, w, h = annotation['bbox']
-        x_min, y_min = 1024 * x / origin_width, 1024 * y / origin_height
-        x_max, y_max = 1024 * (x + w) / origin_width, 1024 * (y + h) / origin_height
-        box =  torch.tensor([[x_min, y_min, x_max, y_max]], device=device, dtype=torch.float32)
-        boxes = torch.concat([boxes, box]) 
-    
     for k in range(args.steps):
         latents = adv_latents
         for i, t in enumerate(model.scheduler.timesteps[-start_time:]):
-            # print(i, t)
             if uncond_embeddings_ is None:
                 context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
             else:
@@ -619,10 +641,10 @@ def text2image_ldm_stable_last(
             #print(1, image_m.max(), image_m.min())
             net.set_torch_image(image_m*255.0,original_image_size=(1024,1024))
                         
-            ad_masks, ad_iou_predictions, ad_low_res_logits = net.predict_torch(point_coords=None,point_labels=None,boxes=boxes,multimask_output=False)
-            loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits,mask_labels) 
+            ad_masks, ad_iou_predictions, ad_low_res_logits = net.predict_torch(point_coords=None,point_labels=None, boxes=boxes, multimask_output=False)
+            loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
         
-            iou = compute_iou(ad_low_res_logits, mask_labels).item()
+            iou = compute_iou(ad_low_res_logits, label_masks_256).item()
             if iou < worst_iou:                
                 best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
                     
@@ -650,8 +672,10 @@ def text2image_ldm_stable_last(
     # Return Best Attack
     latents = best_latent
     for i, t in enumerate(model.scheduler.timesteps[-start_time:]):
-        # print(i, t)
+        print(i, t)
         if uncond_embeddings_ is None:
+            # print('sd', uncond_embeddings.shape)
+            # raise NameError
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
@@ -666,8 +690,10 @@ def text2image_ldm_stable_last(
 
     image = image.clamp(0, 1).detach().cpu().permute(0, 2, 3, 1).numpy()
     image = (image * 255).astype(np.uint8)
-    
+    vis = np.copy(image[0])
     worst_mask_show = np.zeros((512,512,3))
+    
+    vis = cv2.resize(cv2.imread(img_path),(512,512))
     if args.steps:
         num = origin_len
         length = 1<<24
@@ -676,8 +702,50 @@ def text2image_ldm_stable_last(
             pos = (length-1) *(i+1) / num
             color = (pos%256, pos//256%256, pos//(1<<16))
             worst_mask_show[single_mask!=0] = color
+            x1,y1,x2,y2 = tuple((boxes[i].cpu().numpy()/2).tolist())
+            cv2.rectangle(vis, (int(x1),int(y1)), (int(x2),int(y2)) , color, 2)
+
+        vis = cv2.addWeighted(vis, 1.0, worst_mask_show.astype(np.uint8), beta=0.4, gamma=0)    
+    return image, best_latent, worst_mask_show, vis, worst_iou
+
+def check_controlnet():
+    id = 1    
+    prompt = captions[f'sa_{str(id)}.jpg']
+
+    control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     
-    return image, best_latent, worst_mask_show, worst_iou
+    output = ldm_stable(
+        prompt, image=control_image,num_inference_steps=50, guidance_scale=7.5, guess_mode=args.guess_mode
+    ).images[0]
+    
+    output_numpy = np.array(output)
+    print(type(output),output_numpy.max())
+    output.save('check_controlnet_pth.png')
+    
+    control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
+    control_image = np.array(control_image)
+    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
+    controller = EmptyControl()
+    x_t = torch.randn((1, ldm_stable.unet.in_channels,  512// 8, 512 // 8))
+    run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=True, prefix='check_controlnet_use')
+
+def check_inversion():
+    id = 1    
+    prompt = captions[f'sa_{str(id)}.jpg']
+
+    latent_path = f"{args.inversion_dir}/sa_{str(id)}_latent.pth"
+    uncond_path = f"{args.inversion_dir}/sa_{str(id)}_uncond.pth"
+    x_t = torch.load(latent_path).cuda()
+    uncond_embeddings = torch.load(uncond_path).cuda()
+    
+    control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
+    control_image = np.array(control_image)
+    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
+    controller = AttentionStore()
+    
+    run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=uncond_embeddings, verbose=True, prefix='check_inversion')
 
 
 if __name__ == '__main__':
@@ -696,8 +764,20 @@ if __name__ == '__main__':
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
-        print("Attribute disable_xformers_memory_efficient_attention() is missing")
-
+        print("Attribute disable_xformers_memory_efficient_attention() is missing")    
+    
+    # Load imgs and Caption  
+    captions = {}
+    with open(args.caption_path,'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            json_dict = json.loads(line.strip()) 
+            captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
+    
+    # Check controlnet & inversion
+    if args.check_controlnet: check_controlnet()
+    if args.check_inversion: check_inversion()
+    if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save path
     save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
@@ -708,45 +788,43 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(save_path,'adv')): os.mkdir(os.path.join(save_path,'adv'))
     if not os.path.exists(os.path.join(save_path,'record')): os.mkdir(os.path.join(save_path,'record'))
     
-    # Load imgs and Caption  
-    captions = {}
-    with open(args.caption_path,'r') as f:
-        lines = f.readlines()
-        for line in lines:
-            json_dict = json.loads(line.strip()) 
-            captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
-    
+    # Adversarial grad loop
     for i in trange(args.start, args.end+1):
+        
+        # prepare img & mask path
         img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
         control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
-        json_path = args.data_root+'/'+'sa_'+str(i)+'.json'
-        
+        label_mask_dir = args.data_root+'/'+'sa_'+str(i)
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
-        # raw img for mse [1,3,512,512] [0,1]
+        # load raw img for mse [1,3,512,512] [0,1]
         pil_image = Image.open(img_path).convert('RGB').resize(image_size)
         raw_img_show = np.array(pil_image.resize((512,512)))
         raw_img = (torch.tensor(np.array(pil_image).astype(np.float32), device=device).unsqueeze(0)/255.).permute(0,3, 1, 2)
         raw_img = raw_img - mean[None,:,None,None]
         raw_img = raw_img / std[None,:,None,None]
         
-        # annotation json
-        global info_dict, origin_len
-        info_dict = json.loads(open(json_path).read())
-        annotations = info_dict['annotations']
-        annotations = sorted(annotations, key=lambda x: x['bbox'][2]*x['bbox'][3], reverse=True)
-        origin_len = len(annotations)
-        if len(annotations) > args.sam_batch:
-            annotations = annotations[:args.sam_batch]
-        print("========> batchsize:",len(annotations))
+        # load mask labels & boxes prompt 
+        global origin_len
+        origin_len = len(os.listdir(label_mask_dir))
+        label_masks = torch.empty([0,1,1024,1024]).cuda()
+        for j in range(args.sam_batch):
+            label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
+            print(label_mask_path)
+            label_mask = Image.open(label_mask_path).convert('L').resize((image_size))
+            label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
+            print(label_mask_torch.max())
+            label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
+        boxes = masks_to_boxes(label_masks.squeeze())    
+        label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
         
-        # caption
+        # load caption
         prompt = captions[img_path.split('/')[-1]]
         print(prompt)
         
-        #x_t & uncondition embeddings 
+        # load x_t & uncondition embeddings 
         latent_path = f"{args.inversion_dir}/sa_{i}_latent.pth"
         uncond_path = f"{args.inversion_dir}/sa_{i}_uncond.pth"
         
@@ -761,21 +839,23 @@ if __name__ == '__main__':
             print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
             continue
         
-        #control mask    
-        mask_control = cv2.imread(control_mask_path)
-        mask_control = cv2.cvtColor(mask_control, cv2.COLOR_BGR2RGB)
-        mask_control = cv2.resize(mask_control, (512,512))
-        mask_show = mask_control.copy()
-        mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda() / 255.0
+        # load control mask    
+        control_mask = cv2.imread(control_mask_path)
+        control_mask = cv2.cvtColor(control_mask, cv2.COLOR_BGR2RGB)
+        control_mask = cv2.resize(control_mask, (512,512))
+        mask_show = control_mask.copy()
+        control_mask = torch.from_numpy(control_mask).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda() / 255.0
         
-        controller = EmptyControl()
-        
+        # adversarial grad
+        controller = AttentionStore()
         start = time.time()            
-        image_inv, x_t, worst_mask, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=mask_control,raw_img=raw_img,annotations=annotations)    
+        image_inv, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,boxes=boxes, label_masks_256=label_masks_256)    
         print('Grad Time:', time.time() - start)
         
+        # show 
         ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
-        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)))
+        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)))
         
+        # record adversarial iou
         with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
             f.write(str(worst_iou))
