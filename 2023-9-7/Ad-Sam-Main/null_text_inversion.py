@@ -690,6 +690,7 @@ if __name__ == '__main__':
     # Prepare save dir
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(os.path.join(args.save_root , 'pair')): os.mkdir(os.path.join(args.save_root , 'pair'))
+    if not os.path.exists(os.path.join(args.save_root , 'inv')): os.mkdir(os.path.join(args.save_root , 'inv'))
     if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
     # Inversion loop
@@ -732,4 +733,5 @@ if __name__ == '__main__':
         # show 
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
-        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}')
+        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}', shuffix='.jpg')
+        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/sa_{i}', shuffix='.png')
