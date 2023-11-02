@@ -34,7 +34,7 @@ def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, i
     return img
 
 
-def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test'):
+def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.png'):
     if type(images) is list:
         num_empty = len(images) % num_rows
     elif images.ndim == 4:
@@ -59,40 +59,52 @@ def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test'):
 
     pil_img = Image.fromarray(image_)
     display(pil_img)
-    pil_img.save(prefix + '.png')
+    pil_img.save(prefix + shuffix)
 
-def get_noise_pred(model, latents, masks, t, context):
-    down_block_res_samples, mid_block_res_sample = model.controlnet(
-                latents,
-                t,
-                encoder_hidden_states=context,
-                controlnet_cond=masks,
-                return_dict=False,
-            )
-    # predict the noise residual        
+def get_noise_pred(model, latents, masks, t, context, guess_mode=None):
+    if masks != None:
+        down_block_res_samples, mid_block_res_sample = model.controlnet(
+                    latents,
+                    t,
+                    encoder_hidden_states=context,
+                    controlnet_cond=masks,
+                    return_dict=False,
+                )
+    else:
+        down_block_res_samples, mid_block_res_sample = None, None
+    
+    if down_block_res_samples!=None and guess_mode and mid_block_res_sample.shape[0]==2:
+        down_block_res_samples = [d[1:] for d in down_block_res_samples]
+        mid_block_res_sample =  mid_block_res_sample[1:]
+        down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
+        mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+            
     noise_pred = model.unet(
         latents, t, encoder_hidden_states=context,
         down_block_additional_residuals=down_block_res_samples,
         mid_block_additional_residual=mid_block_res_sample,)["sample"]
     return noise_pred
 
-def diffusion_step(model, controller, latents, mask, context, t, guidance_scale, low_resource=False):
+def diffusion_step(model, controller, latents, mask, context, t, guidance_scale, low_resource=False, guess_mode=False):
     if low_resource:
         noise_pred_uncond = get_noise_pred(model,latents, mask,t, context==context[0])
-        noise_prediction_text = get_noise_pred(model, latents, mask, t, context=context[1])
+        if guess_mode:
+            noise_prediction_text = get_noise_pred(model, latents, None, t, context=context[1])
+        else:
+            noise_prediction_text = get_noise_pred(model, latents, mask, t, context=context[1])
     else:
-        print("Latent: ", latents.shape, latents.requires_grad)
+        #print("Latent: ", latents.shape, latents.requires_grad)
         latents_input = torch.cat([latents] * 2)
         masks = torch.cat([mask] * 2)
-        print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
+        #print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
         
-        noise_pred = get_noise_pred(model,latents_input,masks, t, context=context)
+        noise_pred = get_noise_pred(model,latents_input,masks, t, context=context, guess_mode=guess_mode)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
+        
     noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
     latents = model.scheduler.step(noise_pred, t, latents)["prev_sample"]
     latents = controller.step_callback(latents)
     return latents
-
 
 def latent2image(vae, latents):
     latents = 1 / 0.18215 * latents
