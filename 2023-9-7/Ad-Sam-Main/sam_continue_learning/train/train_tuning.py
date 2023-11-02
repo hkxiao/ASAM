@@ -19,6 +19,7 @@ from typing import Dict, List, Tuple
 from datetime import datetime
 from segment_anything_training import sam_model_registry
 from segment_anything_training.modeling import TwoWayTransformer, MaskDecoder
+import torch.distributed as dist
 
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
 from utils.loss_mask import loss_masks
@@ -230,12 +231,7 @@ def show_mask(mask, ax, random_color=False):
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
-    
-def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
+      
     
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -278,6 +274,7 @@ def get_args_parser():
 
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--compile', action='store_true')
     parser.add_argument('--numworkers', type=int, default=-1)
     parser.add_argument("--restore-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
@@ -302,7 +299,8 @@ def main(net, train_datasets, valid_datasets, args):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-
+    torch.cuda.manual_seed_all(seed)
+    
     ### --- Step 1: Train or Valid dataset ---
     if not args.eval:
         print("--- create training dataloader ---")
@@ -354,7 +352,7 @@ def main(net, train_datasets, valid_datasets, args):
         train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     else:
         sam = sam_model_registry[args.model_type](checkpoint=args.checkpoint)
-        #sam = torch.compile(sam)
+        if args.compile: sam = torch.compile(sam)
         _ = sam.to(device=args.device)
         sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
 
@@ -385,8 +383,9 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
         metric_logger = misc.MetricLogger(delimiter="  ")
         train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
-
+    
         for data in metric_logger.log_every(train_dataloaders,10):
+            
             inputs, labels = data['image'], data['label']  # [K 3 1024 1024]   [K N 1024 1024]
             K, N, H, W =labels.shape
             if torch.cuda.is_available(): 
@@ -475,6 +474,8 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 f.write(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
         
         lr_scheduler.step()
+        
+        dist.barrier()
         test_stats = evaluate(args, net, sam, valid_dataloaders)
         train_stats.update(test_stats)
         
@@ -707,13 +708,29 @@ if __name__ == "__main__":
         "im_ext": ".png",
         "gt_ext": ""}
     
+    dataset_sam_subset_div = {"name": "sam_subset",
+        "im_dir": "../../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
+        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""}
+    
     dataset_sam_subset_adv_4 = {"name": "sam_subset",
         "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
         "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
         "im_ext": ".png",
         "gt_ext": ""}
     
-            
+    dataset_sam_subset_inv_4 = {"name": "sam_subset",
+        "im_dir": "/data/tanglv/xhk/Ad-Sam/2023-9-7/Ad-Sam-Main/output/sa_000000@4-Inversion/inv",
+        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""}
+       
+    dataset_sam_subset_SD_9_20_SAM_sam_vit_b_4_ADV_0_2_10_0_01_0_5_100_1_2 = {"name": "sam_subset",
+    "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.01-0.5-100.0-1.0-2/adv",
+    "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+    "im_ext": ".png",
+    "gt_ext": ""}
     
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
         "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
@@ -789,28 +806,22 @@ if __name__ == "__main__":
             "im_ext": ".jpg"
             }
     
-    train_datasets = [dataset_sam_subset_adv_4]
+    train_datasets = [dataset_sam_subset_SD_9_20_SAM_sam_vit_b_4_ADV_0_2_10_0_01_0_5_100_1_2]
     
     
     # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val,dataset_big_val] 
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
-<<<<<<< HEAD
-    # valid_datasets = [dataset_sam_subset_adv]
-=======
     #valid_datasets = [dataset_sam_subset_adv]
->>>>>>> ccbc2ee0438a0b3613f0c7bdf9075beb0f7d473c
     #valid_datasets = [dataset_sam_subset_ori]
     valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
-    valid_datasets = [dataset_ade20k_val,dataset_coco2017_val] 
+    #valid_datasets = [dataset_ade20k_val,dataset_coco2017_val] 
     #valid_datasets = [dataset_big_val]
-    
-    #valid_datasets = train_datasets
     
     args = get_args_parser()
     net = MaskDecoderTL(args.model_type) 
-    
+    if args.compile: net = torch.compile(net)
     main(net, train_datasets, valid_datasets, args)
