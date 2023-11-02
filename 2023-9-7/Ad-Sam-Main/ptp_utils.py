@@ -34,7 +34,7 @@ def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, i
     return img
 
 
-def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test'):
+def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.png'):
     if type(images) is list:
         num_empty = len(images) % num_rows
     elif images.ndim == 4:
@@ -59,7 +59,7 @@ def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test'):
 
     pil_img = Image.fromarray(image_)
     display(pil_img)
-    pil_img.save(prefix + '.png')
+    pil_img.save(prefix + shuffix)
 
 def get_noise_pred(model, latents, masks, t, context, guess_mode=None):
     if masks != None:
@@ -93,10 +93,10 @@ def diffusion_step(model, controller, latents, mask, context, t, guidance_scale,
         else:
             noise_prediction_text = get_noise_pred(model, latents, mask, t, context=context[1])
     else:
-        print("Latent: ", latents.shape, latents.requires_grad)
+        #print("Latent: ", latents.shape, latents.requires_grad)
         latents_input = torch.cat([latents] * 2)
         masks = torch.cat([mask] * 2)
-        print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
+        #print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
         
         noise_pred = get_noise_pred(model,latents_input,masks, t, context=context, guess_mode=guess_mode)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
