@@ -19,6 +19,7 @@ from typing import Dict, List, Tuple
 from datetime import datetime
 from segment_anything_training import sam_model_registry
 from segment_anything_training.modeling import TwoWayTransformer, MaskDecoder
+import torch.distributed as dist
 
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
 from utils.loss_mask import loss_masks
@@ -230,12 +231,7 @@ def show_mask(mask, ax, random_color=False):
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
-    
-def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
+      
     
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -278,6 +274,7 @@ def get_args_parser():
 
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--compile', action='store_true')
     parser.add_argument('--numworkers', type=int, default=-1)
     parser.add_argument("--restore-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
@@ -302,7 +299,8 @@ def main(net, train_datasets, valid_datasets, args):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-
+    torch.cuda.manual_seed_all(seed)
+    
     ### --- Step 1: Train or Valid dataset ---
     if not args.eval:
         print("--- create training dataloader ---")
@@ -354,7 +352,7 @@ def main(net, train_datasets, valid_datasets, args):
         train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     else:
         sam = sam_model_registry[args.model_type](checkpoint=args.checkpoint)
-        #sam = torch.compile(sam)
+        if args.compile: sam = torch.compile(sam)
         _ = sam.to(device=args.device)
         sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
 
@@ -385,8 +383,9 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
         metric_logger = misc.MetricLogger(delimiter="  ")
         train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
-
+    
         for data in metric_logger.log_every(train_dataloaders,10):
+            
             inputs, labels = data['image'], data['label']  # [K 3 1024 1024]   [K N 1024 1024]
             K, N, H, W =labels.shape
             if torch.cuda.is_available(): 
@@ -475,6 +474,8 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 f.write(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
         
         lr_scheduler.step()
+        
+        dist.barrier()
         test_stats = evaluate(args, net, sam, valid_dataloaders)
         train_stats.update(test_stats)
         
@@ -627,186 +628,116 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
 if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
-
-    dataset_dis = {"name": "DIS5K-TR",
-                 "im_dir": "./data/DIS5K/DIS-TR/im",
-                 "gt_dir": "./data/DIS5K/DIS-TR/gt",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_thin = {"name": "ThinObject5k-TR",
-                 "im_dir": "./data/thin_object_detection/ThinObject5K/images_train",
-                 "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_train",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_fss = {"name": "FSS",
-                 "im_dir": "./data/cascade_psp/fss_all",
-                 "gt_dir": "./data/cascade_psp/fss_all",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_duts = {"name": "DUTS-TR",
-                 "im_dir": "./data/cascade_psp/DUTS-TR",
-                 "gt_dir": "./data/cascade_psp/DUTS-TR",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_duts_te = {"name": "DUTS-TE",
-                 "im_dir": "/data/tanglv/data/sod_data/DUTS-TE/imgs",
-                 "gt_dir": "/data/tanglv/data/sod_data/DUTS-TE/gts",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_ecssd = {"name": "ECSSD",
-                 "im_dir": "./data/cascade_psp/ecssd",
-                 "gt_dir": "./data/cascade_psp/ecssd",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_msra = {"name": "MSRA10K",
-                 "im_dir": "./data/cascade_psp/MSRA_10K",
-                 "gt_dir": "./data/cascade_psp/MSRA_10K",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-   
-    dataset_duts_ad = {"name": "duts_ad",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/adv",
-                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
-    
-    dataset_duts_subset = {"name": "duts_subset",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/origin",
-                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
-    
-    dataset_duts_subset = {"name": "duts_subset",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/origin",
-                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
-    
-    
     dataset_sam_subset_ori = {"name": "sam_subset",
-                "im_dir": "/data/tanglv/data/sam-1b/sa_000000",
-                "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+                "im_dir": "../../sam-1b/sa_000000",
+                "gt_dir": "../../sam-1b/sa_000000",
                 "im_ext": ".jpg",
                 "gt_ext": ""}
     
+    dataset_sam_subset_ori_low = {"name": "sam_subset",
+            "im_dir": "../../sam-1b/sa_000000/512",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".jpg",
+            "gt_ext": ""}
+    
     dataset_sam_subset_adv = {"name": "sam_subset",
             "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
-            "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ""}
+    
+    dataset_sam_subset_sa_000000_Inversion = {"name": "sam_subset",
+            "im_dir": "../../output/sa_000000-Inversion/inv",
+            "gt_dir": "../../sam-1b/sa_000000",
             "im_ext": ".png",
             "gt_ext": ""}
     
     dataset_sam_subset_adv_1600 = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
+            "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ""}
+    
+    dataset_sam_subset_div = {"name": "sam_subset",
+        "im_dir": "../../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
         "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
         "im_ext": ".png",
         "gt_ext": ""}
     
     dataset_sam_subset_adv_4 = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
-        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+            "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ""}
     
             
-    
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
-        "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
-        "gt_dir": "/data/tanglv/data/sam-1b-subset",
-        "im_ext": ".png",
-        "gt_ext": ".json"}
+            "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ".json"}
     
     dataset_DatasetDM = {"name": "DatasetDM",
-        "im_dir": "/data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
-        "gt_dir": "/data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
-        "im_ext": ".jpg",
-        "gt_ext": ".jpg"}
+            "im_dir": "../../data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
+            "gt_dir": "../../data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
+            "im_ext": ".jpg",
+            "gt_ext": ".jpg"}
     
     dataset_sam_subset_pgd = {"name": "sam_subset",
-            "im_dir": "/data/tanglv/xhk/Ad-Sam-Main/sam_continue_learning/train/work_dirs/PGD",
-            "gt_dir": "/data/tanglv/data/sam-1b-subset",
+            "im_dir": "../../data/tanglv/xhk/Ad-Sam-Main/sam_continue_learning/train/work_dirs/PGD",
+            "gt_dir": "../../sam-1b/sa_000000",
             "im_ext": ".jpg",
             "gt_ext": ".json"}
     
     # valid set
-    dataset_coift_val = {"name": "COIFT",
-                 "im_dir": "./data/thin_object_detection/COIFT/images",
-                 "gt_dir": "./data/thin_object_detection/COIFT/masks",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
+    
+    # single
     dataset_hrsod_val = {"name": "HRSOD-TE",
-                 "im_dir": "/data/tanglv/data/sod_data/HRSOD-TE/imgs",
-                 "gt_dir": "/data/tanglv/data/sod_data/HRSOD-TE/gts",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
+            "im_dir": "../data/HRSOD-TE/imgs",
+            "gt_dir": "../data/HRSOD-TE/gts",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"}
 
-    dataset_thin_val = {"name": "ThinObject5k-TE",
-                 "im_dir": "./data/thin_object_detection/ThinObject5K/images_test",
-                 "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_test",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_dis_val = {"name": "DIS5K-VD",
-                 "im_dir": "./data/DIS5K/DIS-VD/im",
-                 "gt_dir": "./data/DIS5K/DIS-VD/gt",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-    
-    
-    dataset_big_val = {"name": "BIG",
-                "im_dir": "/data/tanglv/data/BIG/test",
-                "gt_dir": "/data/tanglv/data/BIG/test",
-                "im_ext": "_im.jpg",
-                "gt_ext": "_gt.png"}
     #全景分割
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
-                "im_dir": "/home/ubuntu/disk1/xhk/data/ADE20K_2016_07_26/images/validation",
-                "gt_dir": "/home/ubuntu/disk1/xhk/data/ADE20K_2016_07_26/images/validation",
-                "im_ext": ".jpg",
-                "gt_ext": "_seg.png"}
+            "im_dir": "../data/ADE20K_2016_07_26/images/validation",
+            "gt_dir": "../data/ADE20K_2016_07_26/images/validation",
+            "im_ext": ".jpg",
+            "gt_ext": "_seg.png"}
     #实列分割
     dataset_cityscapes_val = {"name": "cityscaps_val",
-                "im_dir": "/home/ubuntu/disk1/xhk/data/cityscapes/leftImg8bit/val",
-                "gt_dir": "//home/ubuntu/disk1/xhk/data/cityscapes/gtFine/val",
-                "im_ext": "_leftImg8bit.png",
-                "gt_ext": "_gtFine_instanceIds.png"}
+            "im_dir": "../data/cityscapes/leftImg8bit/val",
+            "gt_dir": "../data/cityscapes/gtFine/val",
+            "im_ext": "_leftImg8bit.png",
+            "gt_ext": "_gtFine_instanceIds.png"}
     #实列分割
     dataset_voc2012_val = {"name": "voc2012_val",
-                "im_dir": "/data/tanglv/data/VOC2012/JPEGImages_val",
-                "gt_dir": "/data/tanglv/data/VOC2012/SegmentationObject",
-                "im_ext": ".jpg",
-                "gt_ext": ".png"}
+            "im_dir": "../data/VOC2012/JPEGImages_val",
+            "gt_dir": "../data/VOC2012/SegmentationObject",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"}
     #实列分割
     dataset_coco2017_val = {"name": "coco2017_val",
-            "im_dir": "/home/ubuntu/disk1/xhk/data/COCO2017-val/val2017",
-            "annotation_file": "/home/ubuntu/disk1/xhk/data/COCO2017-val/instances_val2017.json",
+            "im_dir": "../data/COCO2017-val/val2017",
+            "annotation_file": "../data/COCO2017-val/instances_val2017.json",
             "im_ext": ".jpg"
             }
     
-    train_datasets = [dataset_sam_subset_adv_4]
-    
-    
-    # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val,dataset_big_val] 
+    train_datasets = [dataset_sam_subset_ori_low]
+    valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val] 
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
     #valid_datasets = [dataset_sam_subset_adv]
     #valid_datasets = [dataset_sam_subset_ori]
-    #valid_datasets = [dataset_hrsod_val]
+    #valid_datasets = [dataset_hrsod_val, dataset_voc2012_val, dataset_cityscapes_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
-    valid_datasets = [dataset_cityscapes_val,dataset_ade20k_val,dataset_coco2017_val] 
+    #valid_datasets = [dataset_voc2012_val] 
     #valid_datasets = [dataset_big_val]
-    
     #valid_datasets = train_datasets
     
     args = get_args_parser()
     net = MaskDecoderTL(args.model_type) 
-    
+    if args.compile: net = torch.compile(net)
     main(net, train_datasets, valid_datasets, args)
