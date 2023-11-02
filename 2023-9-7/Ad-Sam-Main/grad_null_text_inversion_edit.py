@@ -20,6 +20,8 @@ import cv2
 import json    
 from sam_continue_learning.segment_anything.MyPredictor import SamPredictor
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+from show import show_box, show_mask 
 
 '''
 CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --beta 1 --alpha 0.01 --steps 10  --ddim_steps=50 --norm 2
@@ -53,6 +55,7 @@ parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
 parser.add_argument('--check_controlnet', action='store_true')
 parser.add_argument('--check_inversion', action='store_true')
+parser.add_argument('--debug', action='store_true')
 
 # path setting
 parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
@@ -149,19 +152,6 @@ def masks_to_boxes(masks):
     y_min = y_mask.masked_fill(~(masks>128), 1e8).flatten(1).min(-1)[0]
 
     return torch.stack([x_min, y_min, x_max, y_max], 1)
-
-def show_res(mask, ax, random_color=False):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
-    else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image)
-
-    x0, y0 = box[0], box[1]
-    w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))  
 
 class LocalBlend:
     def get_mask(self, maps, alpha, use_pool):
@@ -672,10 +662,7 @@ def text2image_ldm_stable_last(
     # Return Best Attack
     latents = best_latent
     for i, t in enumerate(model.scheduler.timesteps[-start_time:]):
-        print(i, t)
         if uncond_embeddings_ is None:
-            # print('sd', uncond_embeddings.shape)
-            # raise NameError
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
@@ -690,32 +677,43 @@ def text2image_ldm_stable_last(
 
     image = image.clamp(0, 1).detach().cpu().permute(0, 2, 3, 1).numpy()
     image = (image * 255).astype(np.uint8)
-    vis = np.copy(image[0])
     worst_mask_show = np.zeros((512,512,3))
+    fig, ax = plt.subplots(figsize=(5.12, 5.12))
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0,wspace=0)
+    ax.axis('off')
+    plt.imshow(image[0]/255)
     
-    vis = cv2.resize(cv2.imread(img_path),(512,512))
     if args.steps:
         num = origin_len
         length = 1<<24
         for i, single_mask in enumerate(worst_mask):
             single_mask = single_mask[0].cpu().numpy()
-            pos = (length-1) *(i+1) / num
-            color = (pos%256, pos//256%256, pos//(1<<16))
+            pos = int((length-1) *(i+1) / num)
+            color = np.array((pos%256, pos//256%256, pos//(1<<16)))
             worst_mask_show[single_mask!=0] = color
-            x1,y1,x2,y2 = tuple((boxes[i].cpu().numpy()/2).tolist())
-            cv2.rectangle(vis, (int(x1),int(y1)), (int(x2),int(y2)) , color, 2)
+            
+            print(boxes[i])
+            box= tuple((boxes[i].cpu().numpy()/2).tolist())
+            print(box)            
+            show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
 
-        vis = cv2.addWeighted(vis, 1.0, worst_mask_show.astype(np.uint8), beta=0.4, gamma=0)    
+            show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
+    
+    fig.canvas.draw()
+    data = fig.canvas.tostring_rgb()
+    width, height = fig.canvas.get_width_height()
+    vis = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3))
+    
     return image, best_latent, worst_mask_show, vis, worst_iou
 
 def check_controlnet():
-    id = 1    
+    id = 2    
     prompt = captions[f'sa_{str(id)}.jpg']
 
     control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     
     output = ldm_stable(
-        prompt, image=control_image,num_inference_steps=50, guidance_scale=7.5, guess_mode=args.guess_mode
+        prompt, image=control_image,num_inference_steps=args.ddim_steps, guidance_scale=args.guidance_scale, guess_mode=args.guess_mode
     ).images[0]
     
     output_numpy = np.array(output)
@@ -810,14 +808,16 @@ if __name__ == '__main__':
         global origin_len
         origin_len = len(os.listdir(label_mask_dir))
         label_masks = torch.empty([0,1,1024,1024]).cuda()
-        for j in range(args.sam_batch):
+        for j in range(min(args.sam_batch,origin_len)):
             label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
-            print(label_mask_path)
+            #print(label_mask_path)
             label_mask = Image.open(label_mask_path).convert('L').resize((image_size))
             label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
-            print(label_mask_torch.max())
+            #print(label_mask_torch.max())
             label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
         boxes = masks_to_boxes(label_masks.squeeze())    
+        print(torch.max(boxes))
+        
         label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
         
         # load caption
@@ -835,7 +835,7 @@ if __name__ == '__main__':
             x_t = torch.load(latent_path).cuda()
             uncond_embeddings = torch.load(uncond_path).cuda()
         
-        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')):
+        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
             print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
             continue
         
@@ -854,7 +854,7 @@ if __name__ == '__main__':
         
         # show 
         ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
-        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)))
+        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)), shuffix='.jpg')
         
         # record adversarial iou
         with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
