@@ -40,8 +40,8 @@ def get_im_gt_name_dict(datasets, flag='valid'):
         print("--->>>", flag, " dataset ",i,"/",len(datasets)," ",datasets[i]["name"],"<<<---")
         if "coco" in  datasets[i]["name"]:   
             name_im_gt_list.append({"dataset_name":datasets[i]["name"],
-                "root_dir": "/data/tanglv/data/COCO2017-val/val2017",
-                "annotation_file": "/data/tanglv/data/COCO2017-val/instances_val2017.json"})
+                "root_dir": "/home/ubuntu/disk1/xhk/data/COCO2017-val/val2017",
+                "annotation_file": "/home/ubuntu/disk1/xhk/data/COCO2017-val/instances_val2017.json"})
             print("COCO continue")
             continue
         

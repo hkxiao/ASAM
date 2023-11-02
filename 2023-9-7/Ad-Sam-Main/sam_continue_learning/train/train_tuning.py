@@ -766,14 +766,14 @@ if __name__ == "__main__":
                 "gt_ext": "_gt.png"}
     #全景分割
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
-                "im_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-                "gt_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
+                "im_dir": "/home/ubuntu/disk1/xhk/data/ADE20K_2016_07_26/images/validation",
+                "gt_dir": "/home/ubuntu/disk1/xhk/data/ADE20K_2016_07_26/images/validation",
                 "im_ext": ".jpg",
                 "gt_ext": "_seg.png"}
     #实列分割
     dataset_cityscapes_val = {"name": "cityscaps_val",
-                "im_dir": "/data/tanglv/data/cityscapes/leftImg8bit/val",
-                "gt_dir": "/data/tanglv/data/cityscapes/gtFine/val",
+                "im_dir": "/home/ubuntu/disk1/xhk/data/cityscapes/leftImg8bit/val",
+                "gt_dir": "//home/ubuntu/disk1/xhk/data/cityscapes/gtFine/val",
                 "im_ext": "_leftImg8bit.png",
                 "gt_ext": "_gtFine_instanceIds.png"}
     #实列分割
@@ -784,8 +784,8 @@ if __name__ == "__main__":
                 "gt_ext": ".png"}
     #实列分割
     dataset_coco2017_val = {"name": "coco2017_val",
-            "im_dir": "/data/tanglv/data/COCO2017-val/val2017",
-            "annotation_file": "/data/tanglv/data/COCO2017-val/instances_val2017.json",
+            "im_dir": "/home/ubuntu/disk1/xhk/data/COCO2017-val/val2017",
+            "annotation_file": "/home/ubuntu/disk1/xhk/data/COCO2017-val/instances_val2017.json",
             "im_ext": ".jpg"
             }
     
@@ -796,16 +796,12 @@ if __name__ == "__main__":
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
-<<<<<<< HEAD
-    # valid_datasets = [dataset_sam_subset_adv]
-=======
     #valid_datasets = [dataset_sam_subset_adv]
->>>>>>> ccbc2ee0438a0b3613f0c7bdf9075beb0f7d473c
     #valid_datasets = [dataset_sam_subset_ori]
-    valid_datasets = [dataset_hrsod_val]
+    #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
-    valid_datasets = [dataset_ade20k_val,dataset_coco2017_val] 
+    valid_datasets = [dataset_cityscapes_val,dataset_ade20k_val,dataset_coco2017_val] 
     #valid_datasets = [dataset_big_val]
     
     #valid_datasets = train_datasets
