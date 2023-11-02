@@ -628,85 +628,35 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
 if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
-
-    dataset_dis = {"name": "DIS5K-TR",
-                 "im_dir": "./data/DIS5K/DIS-TR/im",
-                 "gt_dir": "./data/DIS5K/DIS-TR/gt",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_thin = {"name": "ThinObject5k-TR",
-                 "im_dir": "./data/thin_object_detection/ThinObject5K/images_train",
-                 "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_train",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_fss = {"name": "FSS",
-                 "im_dir": "./data/cascade_psp/fss_all",
-                 "gt_dir": "./data/cascade_psp/fss_all",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_duts = {"name": "DUTS-TR",
-                 "im_dir": "./data/cascade_psp/DUTS-TR",
-                 "gt_dir": "./data/cascade_psp/DUTS-TR",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_duts_te = {"name": "DUTS-TE",
-                 "im_dir": "/data/tanglv/data/sod_data/DUTS-TE/imgs",
-                 "gt_dir": "/data/tanglv/data/sod_data/DUTS-TE/gts",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_ecssd = {"name": "ECSSD",
-                 "im_dir": "./data/cascade_psp/ecssd",
-                 "gt_dir": "./data/cascade_psp/ecssd",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_msra = {"name": "MSRA10K",
-                 "im_dir": "./data/cascade_psp/MSRA_10K",
-                 "gt_dir": "./data/cascade_psp/MSRA_10K",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-   
-    dataset_duts_ad = {"name": "duts_ad",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/adv",
-                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
-    
-    dataset_duts_subset = {"name": "duts_subset",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/origin",
-                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
-    
-    dataset_duts_subset = {"name": "duts_subset",
-                "im_dir": "/data/tanglv/Ad-SAM/2023-7-23/main/temp/skip-ablation-01-mi-0.5-sam-0.01-1-2-10-Clip-0.2/origin",
-                "gt_dir": "/data/tanglv/data/sod_data/DUTS-TR/gts",
-                "im_ext": ".png",
-                "gt_ext": ".png"}
-    
-    
     dataset_sam_subset_ori = {"name": "sam_subset",
-                "im_dir": "/data/tanglv/data/sam-1b/sa_000000",
-                "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+                "im_dir": "../../sam-1b/sa_000000",
+                "gt_dir": "../../sam-1b/sa_000000",
                 "im_ext": ".jpg",
                 "gt_ext": ""}
     
+    dataset_sam_subset_ori_low = {"name": "sam_subset",
+            "im_dir": "../../sam-1b/sa_000000/512",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".jpg",
+            "gt_ext": ""}
+    
     dataset_sam_subset_adv = {"name": "sam_subset",
             "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
-            "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ""}
+    
+    dataset_sam_subset_sa_000000_Inversion = {"name": "sam_subset",
+            "im_dir": "../../output/sa_000000-Inversion/inv",
+            "gt_dir": "../../sam-1b/sa_000000",
             "im_ext": ".png",
             "gt_ext": ""}
     
     dataset_sam_subset_adv_1600 = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
-        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+            "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ""}
     
     dataset_sam_subset_div = {"name": "sam_subset",
         "im_dir": "../../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
@@ -715,111 +665,77 @@ if __name__ == "__main__":
         "gt_ext": ""}
     
     dataset_sam_subset_adv_4 = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
-        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+            "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ""}
     
-    dataset_sam_subset_inv_4 = {"name": "sam_subset",
-        "im_dir": "/data/tanglv/xhk/Ad-Sam/2023-9-7/Ad-Sam-Main/output/sa_000000@4-Inversion/inv",
-        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-       
-    dataset_sam_subset_SD_9_20_SAM_sam_vit_b_4_ADV_0_2_10_0_01_0_5_100_1_2 = {"name": "sam_subset",
-    "im_dir": "../../output/sa_000000@4-Grad/skip-ablation-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.01-0.5-100.0-1.0-2/adv",
-    "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
-    "im_ext": ".png",
-    "gt_ext": ""}
-    
+            
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
-        "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
-        "gt_dir": "/data/tanglv/data/sam-1b-subset",
-        "im_ext": ".png",
-        "gt_ext": ".json"}
+            "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../../sam-1b/sa_000000",
+            "im_ext": ".png",
+            "gt_ext": ".json"}
     
     dataset_DatasetDM = {"name": "DatasetDM",
-        "im_dir": "/data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
-        "gt_dir": "/data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
-        "im_ext": ".jpg",
-        "gt_ext": ".jpg"}
+            "im_dir": "../../data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
+            "gt_dir": "../../data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
+            "im_ext": ".jpg",
+            "gt_ext": ".jpg"}
     
     dataset_sam_subset_pgd = {"name": "sam_subset",
-            "im_dir": "/data/tanglv/xhk/Ad-Sam-Main/sam_continue_learning/train/work_dirs/PGD",
-            "gt_dir": "/data/tanglv/data/sam-1b-subset",
+            "im_dir": "../../data/tanglv/xhk/Ad-Sam-Main/sam_continue_learning/train/work_dirs/PGD",
+            "gt_dir": "../../sam-1b/sa_000000",
             "im_ext": ".jpg",
             "gt_ext": ".json"}
     
     # valid set
-    dataset_coift_val = {"name": "COIFT",
-                 "im_dir": "./data/thin_object_detection/COIFT/images",
-                 "gt_dir": "./data/thin_object_detection/COIFT/masks",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
+    
+    # single
     dataset_hrsod_val = {"name": "HRSOD-TE",
-                 "im_dir": "/data/tanglv/data/sod_data/HRSOD-TE/imgs",
-                 "gt_dir": "/data/tanglv/data/sod_data/HRSOD-TE/gts",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
+            "im_dir": "../data/HRSOD-TE/imgs",
+            "gt_dir": "../data/HRSOD-TE/gts",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"}
 
-    dataset_thin_val = {"name": "ThinObject5k-TE",
-                 "im_dir": "./data/thin_object_detection/ThinObject5K/images_test",
-                 "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_test",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-
-    dataset_dis_val = {"name": "DIS5K-VD",
-                 "im_dir": "./data/DIS5K/DIS-VD/im",
-                 "gt_dir": "./data/DIS5K/DIS-VD/gt",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-    
-    
-    dataset_big_val = {"name": "BIG",
-                "im_dir": "/data/tanglv/data/BIG/test",
-                "gt_dir": "/data/tanglv/data/BIG/test",
-                "im_ext": "_im.jpg",
-                "gt_ext": "_gt.png"}
     #全景分割
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
-                "im_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-                "gt_dir": "/data/tanglv/data/ADE20K_2016_07_26/images/validation",
-                "im_ext": ".jpg",
-                "gt_ext": "_seg.png"}
+            "im_dir": "../data/ADE20K_2016_07_26/images/validation",
+            "gt_dir": "../data/ADE20K_2016_07_26/images/validation",
+            "im_ext": ".jpg",
+            "gt_ext": "_seg.png"}
     #实列分割
     dataset_cityscapes_val = {"name": "cityscaps_val",
-                "im_dir": "/data/tanglv/data/cityscapes/leftImg8bit/val",
-                "gt_dir": "/data/tanglv/data/cityscapes/gtFine/val",
-                "im_ext": "_leftImg8bit.png",
-                "gt_ext": "_gtFine_instanceIds.png"}
+            "im_dir": "../data/cityscapes/leftImg8bit/val",
+            "gt_dir": "../data/cityscapes/gtFine/val",
+            "im_ext": "_leftImg8bit.png",
+            "gt_ext": "_gtFine_instanceIds.png"}
     #实列分割
     dataset_voc2012_val = {"name": "voc2012_val",
-                "im_dir": "/data/tanglv/data/VOC2012/JPEGImages_val",
-                "gt_dir": "/data/tanglv/data/VOC2012/SegmentationObject",
-                "im_ext": ".jpg",
-                "gt_ext": ".png"}
+            "im_dir": "../data/VOC2012/JPEGImages_val",
+            "gt_dir": "../data/VOC2012/SegmentationObject",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"}
     #实列分割
     dataset_coco2017_val = {"name": "coco2017_val",
-            "im_dir": "/data/tanglv/data/COCO2017-val/val2017",
-            "annotation_file": "/data/tanglv/data/COCO2017-val/instances_val2017.json",
+            "im_dir": "../data/COCO2017-val/val2017",
+            "annotation_file": "../data/COCO2017-val/instances_val2017.json",
             "im_ext": ".jpg"
             }
     
-    train_datasets = [dataset_sam_subset_SD_9_20_SAM_sam_vit_b_4_ADV_0_2_10_0_01_0_5_100_1_2]
-    
-    
-    # valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val,dataset_big_val] 
+    train_datasets = [dataset_sam_subset_ori_low]
+    valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val] 
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
     #valid_datasets = [dataset_sam_subset_adv]
     #valid_datasets = [dataset_sam_subset_ori]
-    valid_datasets = [dataset_hrsod_val]
+    #valid_datasets = [dataset_hrsod_val, dataset_voc2012_val, dataset_cityscapes_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
-    #valid_datasets = [dataset_ade20k_val,dataset_coco2017_val] 
+    #valid_datasets = [dataset_voc2012_val] 
     #valid_datasets = [dataset_big_val]
+    #valid_datasets = train_datasets
     
     args = get_args_parser()
     net = MaskDecoderTL(args.model_type) 
