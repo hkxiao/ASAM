@@ -46,7 +46,7 @@ def get_im_gt_name_dict(datasets, flag='valid'):
             continue
         
         tmp_im_list, tmp_gt_list = [], []
-        for root, dirs, files in os.walk(datasets[i]["im_dir"]):
+        for root, dirs, files in os.walk(datasets[i]["im_dir"]): 
             tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         
