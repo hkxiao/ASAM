@@ -24,6 +24,13 @@ import torch.distributed as dist
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
 from utils.loss_mask import loss_masks
 import utils.misc as misc
+from torch.optim.lr_scheduler import LambdaLR
+
+def lr_lambda(epoch):
+    if epoch < args.warmup_epoch:
+        return (epoch + 1) / args.warmup_epoch  # warm up 阶段线性增加
+    else:
+        return args.gamma ** (epoch-args.warmup_epoch+1) # warm up 后每个 epoch 除以 2
 
 class LayerNorm2d(nn.Module):
     def __init__(self, num_channels: int, eps: float = 1e-6) -> None:
@@ -253,10 +260,12 @@ def get_args_parser():
 
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--baseline', action='store_true')
-    parser.add_argument('--learning_rate', default=1e-3, type=float)
+    parser.add_argument('--learning_rate', default=5e-4, type=float)
     parser.add_argument('--start_epoch', default=0, type=int)
     parser.add_argument('--lr_drop_epoch', default=10, type=int)
-    parser.add_argument('--max_epoch_num', default=20, type=int)
+    parser.add_argument('--max_epoch_num', default=10, type=int)
+    parser.add_argument('--warmup_epoch', default=5, type=int)
+    parser.add_argument('--gamma', default=0.5, type=float)
     parser.add_argument('--input_size', default=[1024,1024], type=list)
     parser.add_argument('--batch_size_train', default=1, type=int)
     parser.add_argument('--batch_size_prompt_start', default=0, type=int)
@@ -346,8 +355,12 @@ def main(net, train_datasets, valid_datasets, args):
     if not args.eval:
         print("--- define optimizer ---")
         optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
-        lr_scheduler.last_epoch = args.start_epoch
+        
+        # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
+        # lr_scheduler.last_epoch = args.start_epoch
+        
+        # slow star fast decay
+        lr_scheduler = LambdaLR(optimizer, lr_lambda)
 
         train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     else:
@@ -381,6 +394,7 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
     
     for epoch in range(epoch_start,epoch_num): 
         print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
+ 
         metric_logger = misc.MetricLogger(delimiter="  ")
         train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
     
@@ -473,8 +487,8 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
             with open(args.output+'/log.txt','a') as f:
                 f.write(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
         
-        lr_scheduler.step()
         
+        lr_scheduler.step()
         dist.barrier()
         test_stats = evaluate(args, net, sam, valid_dataloaders)
         train_stats.update(test_stats)
@@ -723,18 +737,19 @@ if __name__ == "__main__":
             "im_ext": ".jpg"
             }
     
-    train_datasets = [dataset_sam_subset_ori_low]
-    valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_coco2017_val,dataset_ade20k_val,dataset_cityscapes_val] 
+    train_datasets = [dataset_sam_subset_adv]
+    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_coco2017_val,dataset_ade20k_val] 
+    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val]
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
     #valid_datasets = [dataset_sam_subset_adv]
     #valid_datasets = [dataset_sam_subset_ori]
-    #valid_datasets = [dataset_hrsod_val, dataset_voc2012_val, dataset_cityscapes_val]
+    valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_voc2012_val] 
-    #valid_datasets = [dataset_big_val]
+    #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = train_datasets
     
     args = get_args_parser()
