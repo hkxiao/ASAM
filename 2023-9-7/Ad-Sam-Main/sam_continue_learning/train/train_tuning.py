@@ -355,6 +355,12 @@ def main(net, train_datasets, valid_datasets, args):
     if not args.eval:
         print("--- define optimizer ---")
         optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+        if args.restore_model:
+            print("restore model from:", args.restore_model)
+            if torch.cuda.is_available():
+                net_without_ddp.load_state_dict(torch.load(args.restore_model))
+            else:
+                net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
         
         # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
         # lr_scheduler.last_epoch = args.start_epoch
@@ -738,14 +744,14 @@ if __name__ == "__main__":
             }
     
     train_datasets = [dataset_sam_subset_adv]
-    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_coco2017_val,dataset_ade20k_val] 
+    valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_coco2017_val,dataset_ade20k_val] 
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val]
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
     #valid_datasets = [dataset_sam_subset_adv]
     #valid_datasets = [dataset_sam_subset_ori]
-    valid_datasets = [dataset_hrsod_val]
+    #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val]
     #valid_datasets = [dataset_hrsod_val] 
     #valid_datasets = [dataset_voc2012_val] 
