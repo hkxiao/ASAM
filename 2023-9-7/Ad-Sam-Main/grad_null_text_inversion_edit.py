@@ -43,6 +43,7 @@ parser.add_argument('--guidance_scale', default=7.5, type=float, help='random se
 # grad setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
 parser.add_argument('--gamma', type=float, default=100, help='cnn')
+parser.add_argument('--kappa', type=float, default=100, help='cnn')
 parser.add_argument('--beta', type=float, default=1, help='cnn')
 parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
@@ -152,6 +153,27 @@ def masks_to_boxes(masks):
     y_min = y_mask.masked_fill(~(masks>128), 1e8).flatten(1).min(-1)[0]
 
     return torch.stack([x_min, y_min, x_max, y_max], 1)
+
+def dice_loss(
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+    ):
+    """
+    Compute the DICE loss, similar to generalized IOU for masks
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    """
+
+    inputs = inputs.flatten(1)
+    targets = targets.flatten(1)
+    numerator = 2 * (inputs * targets).sum(-1)
+    denominator = inputs.sum(-1) + targets.sum(-1)
+    loss = 1 - (numerator + 1) / (denominator + 1)
+    return loss.mean()
 
 class LocalBlend:
     def get_mask(self, maps, alpha, use_pool):
@@ -633,7 +655,9 @@ def text2image_ldm_stable_last(
                         
             ad_masks, ad_iou_predictions, ad_low_res_logits = net.predict_torch(point_coords=None,point_labels=None, boxes=boxes, multimask_output=False)
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
-        
+
+            loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
+
             iou = compute_iou(ad_low_res_logits, label_masks_256).item()
             if iou < worst_iou:                
                 best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
@@ -643,7 +667,7 @@ def text2image_ldm_stable_last(
             print(k, image_m.max(), image_m.min(), raw_img.max(), raw_img.min())
             loss_mse =  args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
             
-            loss = loss_ce - loss_mse
+            loss = loss_dice + loss_ce - loss_mse
             loss.backward()
             print('*' * 50)
             print('Loss', loss.item(),'Loss_ce', loss_ce.item(), 'Loss_mse', loss_mse.item())
@@ -778,7 +802,7 @@ if __name__ == '__main__':
     if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save path
-    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' + str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
+    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
     print("Save Path:", save_path)
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(save_path): os.mkdir(save_path)
