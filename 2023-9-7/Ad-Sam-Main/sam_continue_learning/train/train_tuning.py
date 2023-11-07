@@ -744,9 +744,9 @@ if __name__ == "__main__":
             }
     
     train_datasets = [dataset_sam_subset_adv]
-    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_coco2017_val,dataset_ade20k_val] 
+    valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_coco2017_val,dataset_ade20k_val] 
     #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val]
-    valid_datasets = [dataset_coco2017_val,dataset_ade20k_val] #1449 400 500 100
+    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
     # valid_datasets = [dataset_coco2017_val]  #5000
     # valid_datasets = [dataset_ade20k_val]  #2000
     #valid_datasets = [dataset_sam_subset_adv]
