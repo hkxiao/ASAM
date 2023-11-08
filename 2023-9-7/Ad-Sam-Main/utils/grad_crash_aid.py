@@ -51,6 +51,7 @@ if __name__ == '__main__':
 
     # Adversarial grad loop
     for i in range(args.start, args.end+1):
-        if not os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')):
+        if os.path.exists(os.path.join(args.inversion_dir,'sa_'+str(i)+'_latent.pth')) and \
+        not os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')):
             sys.exit(-1)
     sys.exit(0)
