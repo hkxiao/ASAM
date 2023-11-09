@@ -108,7 +108,7 @@ class MaskDecoderTL(MaskDecoder):
         self.load_state_dict(torch.load(checkpoint_path))
         print("Tune Decoder init from SAM MaskDecoder")
         for n,p in self.named_parameters():
-            if 'mask_tokens' not in n:
+            if 'mask_tokens' not in n and 'iou_token' not in n:
                 p.requires_grad = False
             else :
                 print(p.shape)
