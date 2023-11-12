@@ -39,6 +39,7 @@ parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
 parser.add_argument('--guess_mode', action='store_true')   
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
+parser.add_argument('--random_latent', action='store_true')
 
 # grad setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
@@ -638,6 +639,7 @@ def text2image_ldm_stable_last(
                 context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
             else:
                 context = torch.cat([uncond_embeddings_, text_embeddings])
+            #print(model.device, latents.device, mask_control.device, context.device, t.device)
             latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False, guess_mode=args.guess_mode)
 
         image = None
@@ -716,18 +718,18 @@ def text2image_ldm_stable_last(
     if args.steps:
         num = origin_len
         length = 1<<24
+        worst_mask = torch.concat([worst_mask,sup_masks/255])
         for i, single_mask in enumerate(worst_mask):
             single_mask = single_mask[0].cpu().numpy()
             pos = int((length-1) *(i+1) / num)
             color = np.array((pos%256, pos//256%256, pos//(1<<16)))
             worst_mask_show[single_mask!=0] = color
             
-            #print(boxes[i])
-            box= tuple((boxes[i].cpu().numpy()/2).tolist())
-            #print(box)            
-            show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
-
+            if i < args.sam_batch:
+                box= tuple((boxes[i].cpu().numpy()/2).tolist())        
+                show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
             show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
+        
     
     fig.canvas.draw()
     data = fig.canvas.tostring_rgb()
@@ -785,10 +787,10 @@ if __name__ == '__main__':
     GUIDANCE_SCALE = args.guidance_scale
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-
+    
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-    ldm_stable.enable_model_cpu_offload()
+    # ldm_stable.enable_model_cpu_offload()
     
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
@@ -810,6 +812,9 @@ if __name__ == '__main__':
     
     # Prepare save path
     save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
+    if args.random_latent:
+        save_path += '-random_latent'
+    
     print("Save Path:", save_path)
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(save_path): os.mkdir(save_path)
@@ -851,6 +856,14 @@ if __name__ == '__main__':
             #print(label_mask_torch.max())
             label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
         
+        # load sup mask for show
+        sup_masks = torch.empty([0,1,512,512]).cuda()
+        for j in range(min(args.sam_batch,origin_len),origin_len):
+            label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
+            label_mask = Image.open(label_mask_path).convert('L').resize((512,512)) 
+            label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
+            sup_masks = torch.cat([sup_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
+        
         boxes = masks_to_boxes(label_masks.squeeze())    
         #print(torch.max(boxes))
         
@@ -870,6 +883,10 @@ if __name__ == '__main__':
         else:
             x_t = torch.load(latent_path).cuda()
             uncond_embeddings = torch.load(uncond_path).cuda()
+        
+        if args.random_latent:
+            x_t = torch.randn_like(x_t)
+            uncond_embeddings = torch.randn_like(uncond_embeddings)
         
         # load control mask    
         control_mask = cv2.imread(control_mask_path)
