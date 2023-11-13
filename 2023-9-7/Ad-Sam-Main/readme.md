@@ -1,3 +1,7 @@
+# 0. 进入工作目录
+```
+cd Ad-Sam/2023-9-7/Ad-Sam-Main
+```
 # 1. 安装环境
 ```
 conda create -n control python=3.8  
