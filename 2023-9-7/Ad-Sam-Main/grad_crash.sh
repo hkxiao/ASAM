@@ -3,6 +3,7 @@
 start_program() {
     export CUDA_VISIBLE_DEVICES=$1
     python $2 \
+    --random_latent \
     --save_root=output/sa_000000-Grad \
     --data_root=sam-1b/sa_000000 \
     --control_mask_dir=sam-1b/sa_000000 \
@@ -10,11 +11,11 @@ start_program() {
     --controlnet_path=ckpt/control_v11p_sd15_mask_sa000002.pth \
     --sam_batch=140 \
     --eps=0.4 \
-    --steps=10 \
-    --ddim_steps=50 \
+    --steps=1 \
+    --ddim_steps=10 \
     --alpha=0.04 \
     --mu=0.5 \
-    --beta=0.1 \
+    --beta=1.0 \
     --norm=2 \
     --gamma=100 \
     --kappa=3200 \
@@ -24,12 +25,12 @@ start_program() {
 
 # 设置GPU列表
 CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
-start=(4000 4500 5000 5500 6000 6500 7000 7500)
-end=(4500 5000 5500 6000 6500 7000 7500 8000)
+start=(1 500 1000 1500 2000 2500 3000 3500)
+end=(500 1000 1500 2000 2500 3000 3500 4000)
 
-# CUDA_VISIBLE_DEVICES_LIST=(6)
-# start=(1)
-# end=(1)
+# CUDA_VISIBLE_DEVICES_LIST=(0)
+# start=(56)
+# end=(56)
 
 PID_LIST=()
 STATUS=()
