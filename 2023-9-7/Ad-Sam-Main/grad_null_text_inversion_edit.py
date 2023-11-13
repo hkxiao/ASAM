@@ -788,7 +788,6 @@ if __name__ == '__main__':
 
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-    ldm_stable.enable_model_cpu_offload()
     
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()

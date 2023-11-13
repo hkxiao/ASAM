@@ -1,9 +1,3 @@
-# Copyright by HQ-SAM team
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 import os
 import argparse
 import numpy as np
@@ -70,7 +64,7 @@ class MLP(nn.Module):
             x = F.sigmoid(x)
         return x
 
-class MaskDecoderTL(MaskDecoder):
+class MaskDecoder_Tuning(MaskDecoder):
     def __init__(self, model_type):
         super().__init__(transformer_dim=256,
                         transformer=TwoWayTransformer(
@@ -112,10 +106,6 @@ class MaskDecoderTL(MaskDecoder):
                 p.requires_grad = False
             else :
                 print(p.shape)
-
-        transformer_dim=256
-        vit_dim_dict = {"vit_b":768,"vit_l":1024,"vit_h":1280}
-        vit_dim = vit_dim_dict[model_type]
 
     def forward(
         self,
@@ -260,12 +250,13 @@ def get_args_parser():
 
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--baseline', action='store_true')
-    parser.add_argument('--learning_rate', default=5e-4, type=float)
+    parser.add_argument('--learning_rate', default=5e-3, type=float)
     parser.add_argument('--start_epoch', default=0, type=int)
     parser.add_argument('--lr_drop_epoch', default=10, type=int)
     parser.add_argument('--max_epoch_num', default=10, type=int)
     parser.add_argument('--warmup_epoch', default=5, type=int)
     parser.add_argument('--gamma', default=0.5, type=float)
+    parser.add_argument('--slow_fast', action='store_true')
     parser.add_argument('--input_size', default=[1024,1024], type=list)
     parser.add_argument('--batch_size_train', default=1, type=int)
     parser.add_argument('--batch_size_prompt_start', default=0, type=int)
@@ -288,6 +279,8 @@ def get_args_parser():
     parser.add_argument("--restore-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
 
+    parser.add_argument('--train-datasets', nargs='+')
+    parser.add_argument('--valid-datasets', nargs='+')
     return parser.parse_args()
 
 
@@ -362,11 +355,12 @@ def main(net, train_datasets, valid_datasets, args):
             else:
                 net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
         
-        # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
-        # lr_scheduler.last_epoch = args.start_epoch
-        
-        # slow star fast decay
-        lr_scheduler = LambdaLR(optimizer, lr_lambda)
+        if not args.slow_start:
+            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
+            lr_scheduler.last_epoch = args.start_epoch
+        else:
+            print("slow start & fast decay")
+            lr_scheduler = LambdaLR(optimizer, lr_lambda)
 
         train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     else:
@@ -389,7 +383,6 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
 
     epoch_start = args.start_epoch
     epoch_num = args.max_epoch_num
-    train_num = len(train_dataloaders)
 
     net.train()
     _ = net.to(device=args.device)
@@ -465,8 +458,6 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 dense_prompt_embeddings=dense_embeddings,
                 multimask_output=False
             )
-            # print(masks.shape, labels.shape)
-            # raise NameError
             loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
             loss = loss_mask + loss_dice
             
@@ -483,7 +474,6 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
 
             metric_logger.update(training_loss=loss_value, **loss_dict_reduced)
 
-
         print("Finished epoch:      ", epoch)
         metric_logger.synchronize_between_processes()
         print("Averaged stats:", metric_logger)
@@ -492,7 +482,6 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         if misc.is_main_process():
             with open(args.output+'/log.txt','a') as f:
                 f.write(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
-        
         
         lr_scheduler.step()
         dist.barrier()
@@ -666,6 +655,12 @@ if __name__ == "__main__":
             "im_ext": ".png",
             "gt_ext": ""}
     
+    dataset_sam_subset_adv_dice = {"name": "sam_subset",
+        "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../../sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""}
+    
     dataset_sam_subset_sa_000000_Inversion = {"name": "sam_subset",
             "im_dir": "../../output/sa_000000-Inversion/inv",
             "gt_dir": "../../sam-1b/sa_000000",
@@ -709,6 +704,12 @@ if __name__ == "__main__":
             "im_ext": ".jpg",
             "gt_ext": ".json"}
     
+    dataset_sam_subset_pgd_512 = {"name": "sam_subset",
+        "im_dir": "work_dirs/PGD_512",
+        "gt_dir": "../../sam-1b/sa_000000",
+        "im_ext": ".jpg",
+        "gt_ext": ""}
+    
     # valid set
     
     # single
@@ -743,22 +744,12 @@ if __name__ == "__main__":
             "im_ext": ".jpg"
             }
     
-    train_datasets = [dataset_sam_subset_adv]
-    valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_coco2017_val,dataset_ade20k_val] 
-    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val]
-    #valid_datasets = [dataset_voc2012_val,dataset_hrsod_val,dataset_cityscapes_val,dataset_big_val] #1449 400 500 100
-    # valid_datasets = [dataset_coco2017_val]  #5000
-    # valid_datasets = [dataset_ade20k_val]  #2000
-    #valid_datasets = [dataset_sam_subset_adv]
-    #valid_datasets = [dataset_sam_subset_ori]
-    #valid_datasets = [dataset_hrsod_val]
-    #valid_datasets = [dataset_hrsod_val]
-    #valid_datasets = [dataset_hrsod_val] 
-    #valid_datasets = [dataset_voc2012_val] 
-    #valid_datasets = [dataset_hrsod_val]
-    #valid_datasets = train_datasets
     
     args = get_args_parser()
-    net = MaskDecoderTL(args.model_type) 
+    net = MaskDecoder_Tuning(args.model_type) 
     if args.compile: net = torch.compile(net)
+    
+    train_datasets = [globals()[dataset] for dataset in args.train_datasets]
+    valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]
+    
     main(net, train_datasets, valid_datasets, args)
