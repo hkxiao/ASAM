@@ -765,6 +765,146 @@ if __name__ == "__main__":
             "im_ext": ".jpg"
             }
     
+    dataset_camo = {"name": "camo",
+        "im_dir": "/data/tanglv/data/cod_test_data/CAMO/imgs",
+        "gt_dir": "/data/tanglv/data/cod_test_data/CAMO/gts",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_ishape_antenna = {"name": "ishape",
+        "im_dir": "../data/ishape_dataset/antenna/val/image",
+        "gt_dir": "../data/ishape_dataset/antenna/val/instance_map",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_ppdls = {"name": "ppdls",
+        "im_dir": "../data/Plant_Phenotyping_Datasets",
+        "gt_dir": "../data/Plant_Phenotyping_Datasets",
+        "im_ext": "_rgb.png",
+        "gt_ext": "_label.png"
+        }
+    
+    dataset_gtea_train = {"name": "gtea",
+            "im_dir": "../data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+            "gt_dir": "../data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+        }
+    
+    dataset_streets = {"name": "streets_coco",
+        "im_dir": "../data/vehicleannotations/images",
+        "annotation_file": "../data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_TimberSeg = {"name": "timberseg_coco",
+        "im_dir": "..//data/y5npsm3gkj-2/prescaled/",
+        "annotation_file": "../data/y5npsm3gkj-2/prescaled/coco_annotation_rotated.json",
+        "im_ext": ".png",
+    }
+    
+    dataset_ppdls = {"name": "ppdls",
+        "im_dir": "../data/Plant_Phenotyping_Datasets",
+        "gt_dir": "../data/Plant_Phenotyping_Datasets",
+        "im_ext": "_rgb.png",
+        "gt_ext": "_label.png"
+        }
+    
+    dataset_gtea_train = {"name": "gtea",
+        "im_dir": "../data/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "../data/GTEA_GAZE_PLUS/Masks",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_streets = {"name": "streets_coco",
+        "im_dir": "../data/vehicleannotations/images",
+        "annotation_file": "../data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_big_val = {"name": "big",
+        "im_dir": "../data/BIG/val",
+        "gt_dir": "../data/BIG/val",
+        "im_ext": "_im.jpg",
+        "gt_ext": "_gt.png"
+    }
+    
+    dataset_ndis_train = {"name": "ndis_park_coco",
+        "im_dir": "../data/ndis_park/train/imgs",
+        "annotation_file": "../data/ndis_park/train/train_coco_annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
+        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/test.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
+        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
+        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_ext": ".jpg",
+    }
+    
+        
+    dataset_egohos = {"name": "egohos",
+        "im_dir": "../data/egohos/val/image",
+        "gt_dir": "../data/egohos/val/label",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_LVIS = {"name": "LVIS",
+        "im_dir": "../data/LVIS/val2017",
+        "annotation_file": "../data/LVIS/annotations/lvis_v1_val.json",
+        "im_ext": ".jpg",
+    }
+    dataset_BBC038v1 = {"name": "BBC038v1",
+        "im_dir": "../data/BBC038V1-Train",
+        "annotation_file": "../data/BBC038V1-Train",
+        "im_ext": ".png",
+        "gt_ext": ".png"
+    }
+    
+    dataset_DOORS1 = {"name": "DOORS",
+        "im_dir": "../data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/img",
+        "gt_dir": "../data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/Rock_all",
+        "im_ext": ".png",
+        "gt_ext": ".png"
+    }
+    
+    dataset_DOORS2 = {"name": "DOORS",
+        "im_dir": "../data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/img",
+        "gt_dir": "../data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/Rock_all",
+        "im_ext": ".png",
+        "gt_ext": ".png"
+    }
+    
+    
+    dataset_NDD20_ABOVE = {"name": "NDD20_coco",
+        "im_dir": "../data/NDD20/ABOVE",
+        "annotation_file": "../data/NDD20/ABOVE_LABELS.json",
+        "im_ext": ".jpg",
+    }
+    
+    
+    dataset_ZeroWaste = {"name": "ZeroWaste",
+        "im_dir": "../data/splits_final_deblurred/train/data",
+        "gt_dir": "../data/splits_final_deblurred/train/sem_seg",
+        "im_ext": ".PNG",
+        "gt_ext": ".PNG"
+    }
+    
     
     args = get_args_parser()
   

@@ -45,7 +45,7 @@ class COCODataset(Dataset):
     def __getitem__(self, idx):
         image_id = self.image_ids[idx]
         image_info = self.coco.loadImgs(image_id)[0]
-        image_path = os.path.join(self.root_dir, image_info['file_name'])
+        image_path = os.path.join(self.root_dir, image_info['id'])
         im = cv2.imread(image_path)
         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 

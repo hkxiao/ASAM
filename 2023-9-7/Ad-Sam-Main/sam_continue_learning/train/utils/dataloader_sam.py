@@ -77,9 +77,9 @@ class SamDataset(Dataset):
             im = np.repeat(im, 3, axis=2)
                 
         gt = None
+
         for i in range(self.batch_size_prompt_start, self.batch_size_prompt_start+self.batch_size_prompt):
             tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
-            #print(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
             if len(tmp_gt.shape) > 2:
                 tmp_gt = tmp_gt[:, :, 0]
             tmp_gt = np.expand_dims(tmp_gt, axis=0)
@@ -103,7 +103,6 @@ class SamDataset(Dataset):
 
         if self.eval_ori_resolution:
             sample["ori_label"] = sample['label']  # NOTE for evaluation only. And no flip here
-            sample['ori_im_path'] = self.dataset["im_path"][idx]
-            sample['ori_gt_path'] = self.dataset["gt_path"][idx]
-
+            sample['ori_im_path'] = im_path
+            sample['ori_gt_path'] = gt_path
         return sample
