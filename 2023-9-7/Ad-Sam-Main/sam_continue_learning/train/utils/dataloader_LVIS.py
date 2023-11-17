@@ -20,7 +20,7 @@ from torch.utils.data.distributed import DistributedSampler
 import json
 from pycocotools.coco import COCO
 
-class COCODataset(Dataset):
+class LVISDataset(Dataset):
     def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False, batch_size_prompt=-1):
         
         self.root_dir = name_im_gt_list['root_dir']
@@ -31,8 +31,8 @@ class COCODataset(Dataset):
         # Filter out image_ids without any annotations
         self.image_ids = [image_id for image_id in self.image_ids if len(self.coco.getAnnIds(imgIds=image_id)) > 0]
                 
-        # print('-im-',name_im_gt_list["dataset_name"],self.root_dir, ': ',len(self.image_ids))
-        # raise NameError
+        print('-im-',name_im_gt_list["dataset_name"],self.root_dir, ': ',len(self.image_ids))
+        
         self.eval_ori_resolution = eval_ori_resolution
         self.batch_size_prompt = batch_size_prompt
         
@@ -46,7 +46,7 @@ class COCODataset(Dataset):
         image_id = self.image_ids[idx]
         image_info = self.coco.loadImgs(image_id)[0]
 
-        image_path = os.path.join(self.root_dir, image_info['file_name'])
+        image_path = os.path.join(self.root_dir, image_info['coco_url'].split('/')[-1])
         im = cv2.imread(image_path)
         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 

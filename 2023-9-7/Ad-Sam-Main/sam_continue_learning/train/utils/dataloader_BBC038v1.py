@@ -19,9 +19,9 @@ import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
 import json
 from pycocotools import mask
+import cv2
 
-
-class Ade20kDataset(Dataset):
+class BBC03bv1Dataset(Dataset):
     def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False,batch_size_prompt=-1):
 
         self.transform = transform
@@ -41,19 +41,15 @@ class Ade20kDataset(Dataset):
             im_name_list.extend([x.split(os.sep)[-1].split(name_im_gt_list[i]["im_ext"])[0] for x in name_im_gt_list[i]["im_path"]])
                 
             im_path_list.extend(name_im_gt_list[i]["im_path"])
-            gt_path_list.extend(name_im_gt_list[i]["gt_path"])
                 
             im_ext_list.extend([name_im_gt_list[i]["im_ext"] for x in name_im_gt_list[i]["im_path"]])
-            gt_ext_list.extend([name_im_gt_list[i]["gt_ext"] for x in name_im_gt_list[i]["gt_path"]])
 
         self.dataset["data_name"] = dt_name_list
         self.dataset["im_name"] = im_name_list
         self.dataset["im_path"] = im_path_list
         self.dataset["ori_im_path"] = deepcopy(im_path_list)
-        self.dataset["gt_path"] = gt_path_list
         self.dataset["ori_gt_path"] = deepcopy(gt_path_list)
         self.dataset["im_ext"] = im_ext_list
-        self.dataset["gt_ext"] = gt_ext_list
 
         self.eval_ori_resolution = eval_ori_resolution
         self.batch_size_prompt = batch_size_prompt
@@ -64,25 +60,18 @@ class Ade20kDataset(Dataset):
         return len(self.dataset["im_path"])
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
-        gt_path = self.dataset["gt_path"][idx]
+        gt_dir = os.path.join(*im_path.split('/')[:-1]).replace('images','masks')
         
-        im = io.imread(im_path)
-        naive_gt = io.imread(gt_path)        
-        
-        if len(naive_gt.shape) < 3:
-            naive_gt = naive_gt[:, :, np.newaxis]
-        if naive_gt.shape[2] == 1:
-            naive_gt = np.repeat(naive_gt, 3, axis=2)
-        
-        naive_gt = naive_gt[...,0] + naive_gt[...,1]*(1<<8) + naive_gt[...,2]*(1<<16)
-        unique_list = sorted(np.unique(naive_gt))
-        
-        gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
-        for i in unique_list:
-            if i == 0: continue
-            tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
-            tmp_gt[naive_gt==i]=255
-            gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
+        im = cv2.imread(im_path,1)
+        im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+        gt = np.array([False])
+        for file in os.listdir(gt_dir):
+            if 'png' not in file: continue
+            tmp_gt = cv2.imread(gt_dir+'/'+file,0)
+            if gt.any():
+                gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
+            else:    
+                gt = tmp_gt[np.newaxis,:,:]
 
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
@@ -105,6 +94,5 @@ class Ade20kDataset(Dataset):
 
         sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
         sample['ori_im_path'] = self.dataset["im_path"][idx]
-        sample['ori_gt_path'] = self.dataset["gt_path"][idx]
 
         return sample

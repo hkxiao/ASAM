@@ -490,6 +490,9 @@ def mask_iou(pred_label,label):
 
     intersection = ((label * pred_label) > 0).sum()
     union = ((label + pred_label) > 0).sum()
+    
+    if torch.isnan(intersection/union).any():
+        return torch.tensor(0.).cuda()
     return intersection / union
 
 
@@ -534,4 +537,8 @@ def boundary_iou(gt, dt, dilation_ratio=0.02):
     intersection = ((gt_boundary * dt_boundary) > 0).sum()
     union = ((gt_boundary + dt_boundary) > 0).sum()
     boundary_iou = intersection / union
+
+    # raise NameError
+    if union==0:
+        return torch.tensor(0.).to(device)
     return torch.tensor(boundary_iou).float().to(device)

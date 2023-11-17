@@ -67,10 +67,16 @@ class SamDataset(Dataset):
         return len(self.dataset["im_path"])
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
-        gt_path = self.dataset["gt_path"][idx]
+        gt_path = self.dataset["gt_path"][idx]    
         gt_num = len(os.listdir(gt_path))
 
-        im = io.imread(im_path)
+        
+        try:
+            im = io.imread(im_path)
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            print(f"Problematic image path: {im_path}")
+            
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
@@ -92,10 +98,10 @@ class SamDataset(Dataset):
         gt = torch.tensor(gt, dtype=torch.float32)
 
         sample = {
-        "imidx": torch.from_numpy(np.array(idx)),  
-        "image": im,   # 3 H W
-        "label": gt,   # N H W
-        "shape": torch.tensor(im.shape[-2:]),
+            "imidx": torch.from_numpy(np.array(idx)),  
+            "image": im,   # 3 H W
+            "label": gt,   # N H W
+            "shape": torch.tensor(im.shape[-2:]),
         }
 
         if self.transform: 

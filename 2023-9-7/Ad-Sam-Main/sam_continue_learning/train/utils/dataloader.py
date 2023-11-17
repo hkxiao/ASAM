@@ -23,7 +23,9 @@ from utils.dataloader_ade20k import Ade20kDataset
 from utils.dataloader_COCO import COCODataset
 from utils.dataloader_VOC2012 import VOC2012Dataset
 from utils.dataloader_cityscapes import CityScapesDataset
-
+from utils.dataloader_gtea import GTEADataset
+from utils.dataloader_LVIS import LVISDataset
+from utils.dataloader_BBC038v1 import BBC03bv1Dataset
 #### --------------------- dataloader online ---------------------####
 
 
@@ -40,22 +42,40 @@ def get_im_gt_name_dict(datasets, flag='valid'):
         print("--->>>", flag, " dataset ",i,"/",len(datasets)," ",datasets[i]["name"],"<<<---")
         if "coco" in  datasets[i]["name"]:   
             name_im_gt_list.append({"dataset_name":datasets[i]["name"],
-                "root_dir": "../data/COCO2017-val/val2017",
-                "annotation_file": "../data/COCO2017-val/instances_val2017.json"})
-            print("COCO continue")
+                "root_dir": datasets[i]["im_dir"],
+                "annotation_file": datasets[i]["annotation_file"]})
+            print(datasets[i]["name"] + "continue")
+            continue
+        elif "LVIS" in  datasets[i]["name"]:   
+            name_im_gt_list.append({"dataset_name":datasets[i]["name"],
+                "root_dir": datasets[i]["im_dir"],
+                "annotation_file": datasets[i]["annotation_file"]})
+            print(datasets[i]["name"] + "continue")
             continue
         
         tmp_im_list, tmp_gt_list = [], []
         for root, dirs, files in os.walk(datasets[i]["im_dir"]): 
             tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
-        print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         
+        if "BBC038v1" in datasets[i]["name"]:   
+            tmp_im_list = [x for x in tmp_im_list if 'masks' not in x]
+            name_im_gt_list.append({"dataset_name":datasets[i]["name"],
+                                    "im_path":tmp_im_list,
+                                    "im_ext":datasets[i]["im_ext"]})
+            
+            print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
+            print(len(name_im_gt_list))
+            continue
+                
         if(datasets[i]["gt_dir"]==""):
-            print('-gt-', datasets[i]["name"], datasets[i]["gt_dir"], ': ', 'No Ground Truth Found')
             tmp_gt_list = []
         else:
             tmp_gt_list = [x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]) for x in tmp_im_list]
-            print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
+            tmp_gt_list = [x for x in tmp_gt_list if os.path.exists(x)]
+            tmp_im_list = [x for x in tmp_im_list if os.path.exists(x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]))]
+        
+        print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
+        print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
 
 
         name_im_gt_list.append({"dataset_name":datasets[i]["name"],
@@ -100,10 +120,27 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
     else:
         for i in range(len(name_im_gt_list)):  
             if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            #ADE dataloader 三通道 排除了[0 0 0]
             elif 'ADE' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #cityscapes 单通道 什么也没排除
             elif 'cityscaps_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = CityScapesDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #voc 三通道  排除了[0 0 0] [224 224 192]
             elif 'voc2012_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = VOC2012Dataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #coco格式
             elif 'coco' in name_im_gt_list[i]['dataset_name']: gos_dataset = COCODataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #ppnls 三通道 排除了[0 0 0]
+            elif 'ppdls' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #gtea 单通道 排除了[0]
+            elif 'gtea' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #ishape 单通道 排除了[0]
+            elif 'ishape' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #ishape 单通道 排除了[0]
+            elif 'egohos' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            elif 'LVIS' in name_im_gt_list[i]['dataset_name']: gos_dataset = LVISDataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            elif 'BBC038v1' in name_im_gt_list[i]['dataset_name']: gos_dataset = BBC03bv1Dataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            elif 'ZeroWaste' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+
+            
             else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             sampler = DistributedSampler(gos_dataset, shuffle=False)
             dataloader = DataLoader(gos_dataset, batch_size, sampler=sampler, drop_last=False, num_workers=num_workers_)
@@ -130,7 +167,7 @@ class Resize(object):
     def __init__(self,size=[320,320]):
         self.size = size
     def __call__(self,sample):
-        imidx, image, label, shape =  sample['imidx'], sample['image'], sample['label'], sample['shape']
+        imidx, image, label, shape =  sample['imidx'], sample['image'], sample['label'], sample['shape']        
 
         image = torch.squeeze(F.interpolate(torch.unsqueeze(image,0),self.size,mode='bilinear'),dim=0)
         label = torch.squeeze(F.interpolate(torch.unsqueeze(label,0),self.size,mode='bilinear'),dim=0)
