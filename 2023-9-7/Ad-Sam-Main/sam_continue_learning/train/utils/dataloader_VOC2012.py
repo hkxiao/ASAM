@@ -74,8 +74,7 @@ class VOC2012Dataset(Dataset):
         gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
         
         for i in unique_list:
-            if i == 0 or i == 192*(1<<16)+224*(1<<8)+224:
-                continue
+            if i == 0 or i == 192*(1<<16)+224*(1<<8)+224: continue
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
             tmp_gt[naive_gt==i]=255
             gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
