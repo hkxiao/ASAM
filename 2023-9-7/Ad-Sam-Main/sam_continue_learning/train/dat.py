@@ -22,6 +22,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from timm.loss.cross_entropy import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from easyrobust.easyrobust.third_party.vqgan import reconstruct_with_vqgan, VQModel
 from PIL import Image
+from pathlib import Path
 
 class AttackerStep:
     '''
@@ -304,6 +305,7 @@ def get_args_parser():
     parser.add_argument('--find_unused_params', action='store_true')
 
     parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--point_prompt', action='store_true')
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--compile', action='store_true')
     parser.add_argument('--numworkers', type=int, default=-1)
@@ -557,7 +559,8 @@ def compute_iou(preds, target):
     iou = 0
     for i in range(0,len(preds)):
         iou = iou + misc.mask_iou(postprocess_preds[i],target[i])
-    return iou / len(preds)
+    if len(preds): return iou / len(preds)
+    return torch.tensor(0.).cuda()
 
 @torch.no_grad()
 def compute_boundary_iou(preds, target):
@@ -569,21 +572,23 @@ def compute_boundary_iou(preds, target):
     iou = 0
     for i in range(0,len(preds)):
         iou = iou + misc.boundary_iou(target[i],postprocess_preds[i])
-    return iou / len(preds)
+    if len(preds): return iou / len(preds)
+    return torch.tensor(0.).cuda()
 
 @torch.no_grad()
 def evaluate(args, sam, valid_dataloaders, visualize=False):
     sam.eval()
     print("Validating...")
     test_stats = {}
-
+    dataset_id = -1
     for k in range(len(valid_dataloaders)):
+        dataset_id += 1 
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader))
 
         for data_val in metric_logger.log_every(valid_dataloader,10):
-            imidx_val, inputs_val, labels_val, shapes_val, labels_ori = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label']
+            imidx_val, inputs_val, labels_val, shapes_val, labels_ori ,ori_im_path= data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
@@ -623,20 +628,34 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
 
             iou = compute_iou(masks,labels_ori.unsqueeze(1))
             boundary_iou = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
+
+            masks = labels_ori.unsqueeze(1).to(torch.float32)          
             if visualize:
-                print("visualize")
-                os.makedirs(args.output, exist_ok=True)
+                # print(valid_datasets, dataset_id)
+                # raise NameError
+                
+                save_dir = os.path.join(args.output,valid_datasets[dataset_id]['name'])
+                Path(save_dir).mkdir(parents=True,exist_ok=True)
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
                 for ii in range(len(imgs)):
-                    base = data_val['imidx'][ii].item()
-                    print('base:', base)
-                    save_base = os.path.join(args.output, str(k)+'_'+ str(base))
+                    base = ori_im_path[ii].split('/')[-1].split('.')[0]
+                    #base = data_val['imidx'][ii].item()
+                    
+                    save_base = os.path.join(save_dir, str(base))
                     imgs_ii = imgs[ii].astype(dtype=np.uint8)
                     show_iou = torch.tensor([iou.item()])
                     show_boundary_iou = torch.tensor([boundary_iou.item()])
-                    show_anns(masks_vis[ii], None, labels_box[ii].cpu(), None, save_base , imgs_ii, show_iou, show_boundary_iou)
-                       
-
+                    print(save_base)
+                    
+                    if not args.point_prompt:
+                        try:
+                            show_anns(masks_vis[ii], None, labels_box[ii].cpu(), None, save_base , imgs_ii, show_iou, show_boundary_iou)
+                        except: 
+                            continue       
+                    else:
+                        show_anns(masks_vis[ii], labels_points[ii].cpu(), None, torch.ones(labels_points[ii].shape[0]).cpu(), save_base , imgs_ii, show_iou, show_boundary_iou)
+        
+        
             loss_dict = {"val_iou_"+str(k): iou, "val_boundary_iou_"+str(k): boundary_iou}
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
