@@ -83,7 +83,7 @@ class COCODataset(Dataset):
         
         if self.eval_ori_resolution:
             sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
-            sample['ori_im_path'] = True
+            sample['ori_im_path'] = image_info['file_name']
             sample['ori_gt_path'] = True
         
         return sample

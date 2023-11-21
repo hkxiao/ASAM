@@ -19,6 +19,7 @@ from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFli
 from utils.loss_mask import loss_masks
 import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR
+from pathlib import Path
 
 def lr_lambda(epoch):
     if epoch < args.warmup_epoch:
@@ -220,6 +221,12 @@ def show_anns(masks, input_point, input_box, input_label, filename, image, ious,
         plt.savefig(filename+'_'+str(i)+'.png',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
 
+def show_points(coords, labels, ax, marker_size=175):
+    pos_points = coords[labels==1]
+    neg_points = coords[labels==0]
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25) 
+
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -229,7 +236,6 @@ def show_mask(mask, ax, random_color=False):
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
       
-    
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
@@ -275,6 +281,7 @@ def get_args_parser():
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--compile', action='store_true')
+    parser.add_argument('--point_prompt', action='store_true')
     parser.add_argument('--numworkers', type=int, default=-1)
     parser.add_argument("--restore-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
@@ -538,17 +545,18 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     net.eval()
     print("Validating...")
     test_stats = {}
-
+    dataset_id = -1
     for k in range(len(valid_dataloaders)):
+        dataset_id += 1
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader))
-
         for data_val in metric_logger.log_every(valid_dataloader,10):
-            imidx_val, inputs_val, labels_val, shapes_val, labels_ori = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label']
+            
+            imidx_val, inputs_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
-            
+            if n==0: continue  
             if torch.cuda.is_available():
                 inputs_val = inputs_val.cuda()
                 labels_val = labels_val.reshape(K*N,H,W).cuda() #K*N 1024 1024 
@@ -556,8 +564,16 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
             
-            labels_box = misc.masks_to_boxes(labels_val) #K*N 4
-            input_keys = ['box']
+            labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
+            if args.point_prompt:        
+                try:
+                    labels_points = misc.masks_sample_points(labels_val) #[K*N 10 2]
+                except:
+                    continue
+
+            input_keys = ['box'] if not args.point_prompt else ['point']
+            batched_input = []
+            
             batched_input = []
             for b_i in range(len(imgs)):
                 dict_input = dict()
@@ -578,8 +594,11 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     raise NotImplementedError
                 dict_input['original_size'] = imgs[b_i].shape[:2]
                 batched_input.append(dict_input)
-
-            batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
+                        
+            try:
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
+            except:
+                continue
             
             batch_len = len(batched_output)
             encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
@@ -598,25 +617,34 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     multimask_output=False,
                 )
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-        
+
             iou = compute_iou(masks,labels_ori.unsqueeze(1))
             boundary_iou = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
-
+            
+            #masks = (masks + labels_ori.unsqueeze(1))/2    
             if visualize:
-                print("visualize")
-                os.makedirs(args.output, exist_ok=True)
+                # print(valid_datasets, dataset_id)
+                # raise NameError
+                save_dir = os.path.join(args.output,valid_datasets[dataset_id]['name'])
+                Path(save_dir).mkdir(parents=True,exist_ok=True)
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
                 for ii in range(len(imgs)):
-                    base = data_val['imidx'][ii].item()
-                    print('base:', base)
-                    save_base = os.path.join(args.output, str(k)+'_'+ str(base))
+                    base = ori_im_path[ii].split('/')[-1].split('.')[0]
+                    #base = data_val['imidx'][ii].item()
+                    
+                    save_base = os.path.join(save_dir, str(base))
                     imgs_ii = imgs[ii].astype(dtype=np.uint8)
                     show_iou = torch.tensor([iou.item()])
                     show_boundary_iou = torch.tensor([boundary_iou.item()])
-                    show_anns(masks_vis[ii], None, labels_box[ii].cpu(), None, save_base , imgs_ii, show_iou, show_boundary_iou)
-                       
-
+                    print(save_base)
+                    
+                    if not args.point_prompt:
+                        show_anns(masks_vis[ii], None, labels_box[ii].cpu(), None, save_base , imgs_ii, show_iou, show_boundary_iou)
+                    else:
+                        show_anns(masks_vis[ii], labels_points[ii].cpu(), None, torch.ones(labels_points[ii].shape[0]).cpu(), save_base , imgs_ii, show_iou, show_boundary_iou)
+                    
             loss_dict = {"val_iou_"+str(k): iou, "val_boundary_iou_"+str(k): boundary_iou}
+            # print(loss_dict)
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
 
@@ -743,6 +771,145 @@ if __name__ == "__main__":
             "annotation_file": "../data/COCO2017-val/instances_val2017.json",
             "im_ext": ".jpg"
             }
+    dataset_camo = {"name": "camo",
+        "im_dir": "/data/tanglv/data/cod_test_data/CAMO/imgs",
+        "gt_dir": "/data/tanglv/data/cod_test_data/CAMO/gts",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_ishape_antenna = {"name": "ishape",
+        "im_dir": "../data/ishape_dataset/antenna/val/image",
+        "gt_dir": "../data/ishape_dataset/antenna/val/instance_map",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_ppdls = {"name": "ppdls",
+        "im_dir": "../data/Plant_Phenotyping_Datasets",
+        "gt_dir": "../data/Plant_Phenotyping_Datasets",
+        "im_ext": "_rgb.png",
+        "gt_ext": "_label.png"
+        }
+    
+    dataset_gtea_train = {"name": "gtea",
+            "im_dir": "../data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+            "gt_dir": "../data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+        }
+    
+    dataset_streets = {"name": "streets_coco",
+        "im_dir": "../data/vehicleannotations/images",
+        "annotation_file": "../data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_TimberSeg = {"name": "timberseg_coco",
+        "im_dir": "..//data/y5npsm3gkj-2/prescaled/",
+        "annotation_file": "../data/y5npsm3gkj-2/prescaled/coco_annotation_rotated.json",
+        "im_ext": ".png",
+    }
+    
+    dataset_ppdls = {"name": "ppdls",
+        "im_dir": "../data/Plant_Phenotyping_Datasets",
+        "gt_dir": "../data/Plant_Phenotyping_Datasets",
+        "im_ext": "_rgb.png",
+        "gt_ext": "_label.png"
+        }
+    
+    dataset_gtea_train = {"name": "gtea",
+        "im_dir": "../data/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "../data/GTEA_GAZE_PLUS/Masks",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_streets = {"name": "streets_coco",
+        "im_dir": "../data/vehicleannotations/images",
+        "annotation_file": "../data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_big_val = {"name": "big",
+        "im_dir": "../data/BIG/val",
+        "gt_dir": "../data/BIG/val",
+        "im_ext": "_im.jpg",
+        "gt_ext": "_gt.png"
+    }
+    
+    dataset_ndis_train = {"name": "ndis_park_coco",
+        "im_dir": "../data/ndis_park/train/imgs",
+        "annotation_file": "../data/ndis_park/train/train_coco_annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
+        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/test.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
+        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
+        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_ext": ".jpg",
+    }
+    
+        
+    dataset_egohos = {"name": "egohos",
+        "im_dir": "../data/egohos/val/image",
+        "gt_dir": "../data/egohos/val/label",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
+    dataset_LVIS = {"name": "LVIS",
+        "im_dir": "../data/LVIS/val2017",
+        "annotation_file": "../data/LVIS/annotations/lvis_v1_val.json",
+        "im_ext": ".jpg",
+    }
+    dataset_BBC038v1 = {"name": "BBC038v1",
+        "im_dir": "../data/BBC038V1-Train",
+        "annotation_file": "../data/BBC038V1-Train",
+        "im_ext": ".png",
+        "gt_ext": ".png"
+    }
+    
+    dataset_DOORS1 = {"name": "DOORS1",
+        "im_dir": "../data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/img",
+        "gt_dir": "../data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/Rock_all",
+        "im_ext": ".png",
+        "gt_ext": ".png"
+    }
+    
+    dataset_DOORS2 = {"name": "DOORS2",
+        "im_dir": "../data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/img",
+        "gt_dir": "../data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/Rock_all",
+        "im_ext": ".png",
+        "gt_ext": ".png"
+    }
+    
+    
+    dataset_NDD20_ABOVE = {"name": "NDD20_coco",
+        "im_dir": "../data/NDD20/ABOVE",
+        "annotation_file": "../data/NDD20/ABOVE_LABELS.json",
+        "im_ext": ".jpg",
+    }
+    
+    
+    dataset_ZeroWaste = {"name": "ZeroWaste",
+        "im_dir": "../data/splits_final_deblurred/train/data",
+        "gt_dir": "../data/splits_final_deblurred/train/sem_seg",
+        "im_ext": ".PNG",
+        "gt_ext": ".PNG"
+    }
     
     
     args = get_args_parser()
