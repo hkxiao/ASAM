@@ -30,7 +30,8 @@ class LVISDataset(Dataset):
         self.image_ids = list(self.coco.imgs.keys())
         # Filter out image_ids without any annotations
         self.image_ids = [image_id for image_id in self.image_ids if len(self.coco.getAnnIds(imgIds=image_id)) > 0]
-                
+        self.image_ids = [image_id for image_id in self.image_ids if os.path.exists(os.path.join(self.root_dir, self.coco.loadImgs(image_id)[0]['coco_url'].split('/')[-1]))]
+        
         print('-im-',name_im_gt_list["dataset_name"],self.root_dir, ': ',len(self.image_ids))
         
         self.eval_ori_resolution = eval_ori_resolution
@@ -38,6 +39,13 @@ class LVISDataset(Dataset):
         
         #To DO: open all instance
         self.all_instance = batch_size_prompt    
+        
+        # mx_info = 0
+        # for image_id in self.image_ids:
+        #     image_infos = self.coco.loadImgs(image_id)
+        #     mx_info = max(mx_info, len(image_infos))
+        # print(mx_info) 1
+        # raise NameError        
         
     def __len__(self):
         return len(self.image_ids)
@@ -68,9 +76,9 @@ class LVISDataset(Dataset):
                 gt.append(decoded_mask)
             except:
                 continue
-            
+        
         gt = torch.tensor(np.stack(gt)).to(torch.float32) * 255.0
-
+        # print(gt.shape)
         sample = {
             "imidx": torch.from_numpy(np.array(idx)),  
             "image": im,   # 3 H W
