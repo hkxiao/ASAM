@@ -260,6 +260,13 @@ def show_mask(mask, ax, random_color=False):
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
       
+def record_iou(filename, ious, boundary_ious):
+    if len(ious) == 0:
+        return
+
+    for i, (iou, biou) in enumerate(zip(ious, boundary_ious)):
+        with open(filename+'_'+str(i)+'.txt','w') as f:
+            f.write(str(round(iou.item()*100,2)))
     
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -676,13 +683,13 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
                 metric_logger.update(**loss_dict_reduced)
                 continue
         
+            save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
+            Path(save_dir).mkdir(parents=True,exist_ok=True)
+            base = ori_im_path[0].split('/')[-1].split('.')[0]
+            save_base = os.path.join(save_dir, str(base))
+            record_iou(save_base, iou_list, boundary_iou_list)
             if visualize:
-                save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
-                Path(save_dir).mkdir(parents=True,exist_ok=True)
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-                
-                base = ori_im_path[0].split('/')[-1].split('.')[0]
-                save_base = os.path.join(save_dir, str(base))
                 imgs_ii = imgs[0].astype(dtype=np.uint8)
     
                 if args.prompt_type=='box':
