@@ -234,26 +234,42 @@ def lr_lambda(epoch):
     else:
         return args.gamma ** (epoch-args.warmup_epoch+1) # warm up 后每个 epoch 除以 2
 
-def show_anns(masks, input_point, input_box, input_label, filename, image, ious, boundary_ious):
+def show_anns(labels_val, masks, input_point, input_box, input_label, filename, image, ious, boundary_ious):
     if len(masks) == 0:
         return
 
-    for i, (mask, iou, biou) in enumerate(zip(masks, ious, boundary_ious)):
+    print(masks.shape, len(ious), len(boundary_ious))
+    for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
+       
+        plt.figure(figsize=(10,10))
+        plt.imshow(image)
+        show_mask(label_val/255.0, plt.gca(), label_mode=True) 
+        plt.axis('off')
+        plt.savefig(filename+'_'+str(i)+'_gt.png',bbox_inches='tight',pad_inches=-0.1)
+        plt.close() 
+        
         plt.figure(figsize=(10,10))
         plt.imshow(image)
         show_mask(mask, plt.gca())
         if input_box is not None:
-            show_box(input_box, plt.gca())
+            show_box(input_box[i], plt.gca())
         if (input_point is not None) and (input_label is not None): 
-            show_points(input_point, input_label, plt.gca())
-
+            show_points(input_point[i], input_label[i], plt.gca())
         plt.axis('off')
         plt.savefig(filename+'_'+str(i)+'.png',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
+        
+def show_points(coords, labels, ax, marker_size=175):
+    pos_points = coords[labels==1]
+    neg_points = coords[labels==0]
+    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25) 
 
-def show_mask(mask, ax, random_color=False):
+def show_mask(mask, ax, label_mode=False,random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    elif label_mode:
+        color = np.array([122/255, 166/255, 82/255, 0.6])
     else:
         color = np.array([30/255, 144/255, 255/255, 0.6])
     h, w = mask.shape[-2:]
@@ -329,7 +345,7 @@ def get_args_parser():
     parser.add_argument('--find_unused_params', action='store_true')
 
     # Output Setting
-    parser.add_argument("--output_prefix", type=str, required=True, 
+    parser.add_argument("--output_prefix", type=str, required=False, 
                         help="Path to the directory where masks and checkpoints will be output")
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--model_save_fre', default=1, type=int)
@@ -609,9 +625,11 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
     print("Validating...")
     test_stats = {}
     dataset_id = -1
-    bad_examples = 0
+    # print(len(valid_dataloaders))
+    # raise NameError
     for k in range(len(valid_dataloaders)):
-        dataset_id += 1 
+        dataset_id += 1
+        bad_examples = 0 
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader))
@@ -682,7 +700,18 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
                 loss_dict_reduced = misc.reduce_dict(loss_dict)
                 metric_logger.update(**loss_dict_reduced)
                 continue
-        
+            
+            if torch.isnan(iou).any() or torch.isnan(boundary_iou).any():
+                iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
+                boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
+            else:
+                bad_examples += 1
+                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
+                loss_dict_reduced = misc.reduce_dict(loss_dict)
+                metric_logger.update(**loss_dict_reduced)
+                continue
+            
+            
             save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
             Path(save_dir).mkdir(parents=True,exist_ok=True)
             base = ori_im_path[0].split('/')[-1].split('.')[0]
@@ -696,11 +725,12 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
                     show_anns(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
                 elif args.prompt_type=='point':
                     show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
-                        
-                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
-                loss_dict_reduced = misc.reduce_dict(loss_dict)
-                metric_logger.update(**loss_dict_reduced)
-
+            
+            loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
+            loss_dict_reduced = misc.reduce_dict(loss_dict)
+            metric_logger.update(**loss_dict_reduced)            
+                    
+            
             print('============================')
             # gather the stats from all processes
             metric_logger.synchronize_between_processes()
@@ -714,7 +744,7 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
                     f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
                     f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
 
-        return test_stats
+    return test_stats
 
 if __name__ == "__main__":
 
