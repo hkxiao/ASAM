@@ -215,7 +215,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
         plt.imshow(image)
         show_mask(label_val/255.0, plt.gca(), label_mode=True) 
         plt.axis('off')
-        plt.savefig(filename+'_'+str(i)+'_gt.png',bbox_inches='tight',pad_inches=-0.1)
+        plt.savefig(filename+'_'+str(i)+'_gt.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close() 
         
         plt.figure(figsize=(10,10))
@@ -226,7 +226,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
         if (input_point is not None) and (input_label is not None): 
             show_points(input_point[i], input_label[i], plt.gca())
         plt.axis('off')
-        plt.savefig(filename+'_'+str(i)+'.png',bbox_inches='tight',pad_inches=-0.1)
+        plt.savefig(filename+'_'+str(i)+'.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
 
 def record_iou(filename, ious, boundary_ious):
