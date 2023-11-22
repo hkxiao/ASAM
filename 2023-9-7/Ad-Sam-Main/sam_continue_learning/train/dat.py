@@ -18,7 +18,7 @@ import torch.distributed as dist
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
 from utils.loss_mask import loss_masks
 import utils.misc as misc
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR,StepLR
 from timm.loss.cross_entropy import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from easyrobust.easyrobust.third_party.vqgan import reconstruct_with_vqgan, VQModel
 from PIL import Image
@@ -260,6 +260,13 @@ def show_mask(mask, ax, random_color=False):
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
       
+def record_iou(filename, ious, boundary_ious):
+    if len(ious) == 0:
+        return
+
+    for i, (iou, biou) in enumerate(zip(ious, boundary_ious)):
+        with open(filename+'_'+str(i)+'.txt','w') as f:
+            f.write(str(round(iou.item()*100,2)))
     
 def show_box(box, ax):
     x0, y0 = box[0], box[1]
@@ -341,7 +348,8 @@ def main(train_datasets, valid_datasets, args):
         os.makedirs(args.output, exist_ok=True)
         with open(args.output+'/log.txt','a') as f:
             f.write('\n\n\n=========>> '+str(datetime.now())+'\n')
-    
+            f.write(str(args)+'\n')
+            
     seed = args.seed + misc.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -377,7 +385,12 @@ def main(train_datasets, valid_datasets, args):
     print(len(valid_dataloaders), " valid dataloaders created")
     
     ### --- Step 2: DistributedDataParallel---
-    sam = sam_model_registry[args.model_type](checkpoint=args.checkpoint)
+    sam_checkpoint_map = {
+        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+    }
+    sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
     if args.compile: sam = torch.compile(sam)
     _ = sam.to(device=args.device)
     sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
@@ -403,8 +416,7 @@ def main(train_datasets, valid_datasets, args):
         optimizer = optim.Adam(sam_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
         
         if not args.slow_start:
-            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
-            lr_scheduler.last_epoch = args.start_epoch
+            lr_scheduler = StepLR(optimizer, args.lr_drop_epoch, last_epoch=args.start_epoch)
         else:
             print("slow start & fast decay")
             lr_scheduler = LambdaLR(optimizer, lr_lambda)
@@ -569,10 +581,12 @@ def compute_iou(preds, target):
     else:
         postprocess_preds = preds
     iou = 0
+    iou_list = []
     for i in range(0,len(preds)):
-        iou = iou + misc.mask_iou(postprocess_preds[i],target[i])
-    if len(preds): return iou / len(preds)
-    return torch.tensor(0.).cuda()
+        single_iou = misc.mask_iou(postprocess_preds[i],target[i])
+        iou = iou + single_iou
+        iou_list.append(single_iou)
+    return iou / len(preds), iou_list
 
 @torch.no_grad()
 def compute_boundary_iou(preds, target):
@@ -582,10 +596,12 @@ def compute_boundary_iou(preds, target):
     else:
         postprocess_preds = preds
     iou = 0
+    iou_list = []
     for i in range(0,len(preds)):
-        iou = iou + misc.boundary_iou(target[i],postprocess_preds[i])
-    if len(preds): return iou / len(preds)
-    return torch.tensor(0.).cuda()
+        single_iou = misc.boundary_iou(target[i],postprocess_preds[i])
+        iou = iou + single_iou
+        iou_list.append(single_iou)
+    return iou / len(preds), iou_list
 
 @torch.no_grad()
 def evaluate(args, sam, valid_dataloaders, visualize=False):
@@ -593,6 +609,7 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
     print("Validating...")
     test_stats = {}
     dataset_id = -1
+    bad_examples = 0
     for k in range(len(valid_dataloaders)):
         dataset_id += 1 
         metric_logger = misc.MetricLogger(delimiter="  ")
@@ -603,6 +620,13 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori ,ori_im_path= data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
+
+            if n == 0:
+                bad_examples += 1
+                loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
+                loss_dict_reduced = misc.reduce_dict(loss_dict)
+                metric_logger.update(**loss_dict_reduced)
+                continue
             
             if torch.cuda.is_available():
                 inputs_val = inputs_val.cuda()
@@ -611,85 +635,86 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
             
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
             
-            labels_box = misc.masks_to_boxes(labels_val) #K*N 4
-            input_keys = ['box']
-            batched_input = []
-            for b_i in range(len(imgs)):
-                dict_input = dict()
+            if args.prompt_type=='box': 
+                labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
+            if args.prompt_type=='point':        
+                try:
+                    labels_points = misc.masks_sample_points(labels_val) #[K*N 10 2]
+                except:
+                    bad_examples+=1
+                    loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
+                    loss_dict_reduced = misc.reduce_dict(loss_dict)
+                    metric_logger.update(**loss_dict_reduced)
+                    continue
                 
-                input_image = torch.as_tensor(imgs[b_i].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
-                dict_input['image'] = input_image.to(torch.float32) 
-                input_type = random.choice(input_keys)
-                sparse_slice, dense_slice = slice(b_i*N,b_i*N+N),slice(b_i*N,b_i*N+N)
-                if input_type == 'box':
-                    dict_input['boxes'] = labels_box[sparse_slice,...] #N 4
-                elif input_type == 'point':
-                    point_coords = labels_points[b_i:b_i+1]
-                    dict_input['point_coords'] = point_coords
-                    dict_input['point_labels'] = torch.ones(point_coords.shape[1], device=point_coords.device)[None,:]
-                elif input_type == 'noise_mask':
-                    dict_input['mask_inputs'] = labels_noisemask[b_i:b_i+1]
-                else:
-                    raise NotImplementedError
-                dict_input['original_size'] = imgs[b_i].shape[:2]
-                batched_input.append(dict_input)
+            batched_input = []
+            dict_input = dict()
+                
+            input_image = torch.as_tensor(imgs[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
+            dict_input['image'] = input_image 
+            if args.prompt_type == 'box':
+                dict_input['boxes'] = labels_box #N 4
+            elif args.prompt_type == 'point': 
+                point_coords = labels_points #[N 10 2]
+                print(point_coords.shape)
+                dict_input['point_coords'] = point_coords
+                dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
+            elif args.prompt_type == 'noise_mask':
+                dict_input['mask_inputs'] = labels_noisemask[b_i:b_i+1]
+            else:
+                raise NotImplementedError
+            
+            dict_input['original_size'] = imgs[0].shape[:2]
+            batched_input.append(dict_input)
 
             batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
         
             masks = batched_output[0]['low_res_logits']
 
-            iou = compute_iou(masks,labels_ori.unsqueeze(1))
-            boundary_iou = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
-
-            masks = labels_ori.unsqueeze(1).to(torch.float32)          
+            print(masks.shape,labels_ori.shape)
+            
+            try:
+                iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
+                boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
+            except:
+                bad_examples += 1
+                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
+                loss_dict_reduced = misc.reduce_dict(loss_dict)
+                metric_logger.update(**loss_dict_reduced)
+                continue
+        
+            save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
+            Path(save_dir).mkdir(parents=True,exist_ok=True)
+            base = ori_im_path[0].split('/')[-1].split('.')[0]
+            save_base = os.path.join(save_dir, str(base))
+            record_iou(save_base, iou_list, boundary_iou_list)
             if visualize:
-                # print(valid_datasets, dataset_id)
-                # raise NameError
-                
-                save_dir = os.path.join(args.output,valid_datasets[dataset_id]['name'])
-                Path(save_dir).mkdir(parents=True,exist_ok=True)
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-                for ii in range(len(imgs)):
-                    base = ori_im_path[ii].split('/')[-1].split('.')[0]
-                    #base = data_val['imidx'][ii].item()
-                    
-                    save_base = os.path.join(save_dir, str(base))
-                    imgs_ii = imgs[ii].astype(dtype=np.uint8)
-                    show_iou = torch.tensor([iou.item()])
-                    show_boundary_iou = torch.tensor([boundary_iou.item()])
-                    print(save_base)
-                    
-                    if not args.point_prompt:
-                        try:
-                            show_anns(masks_vis[ii], None, labels_box[ii].cpu(), None, save_base , imgs_ii, show_iou, show_boundary_iou)
-                        except: 
-                            continue       
-                    else:
-                        show_anns(masks_vis[ii], labels_points[ii].cpu(), None, torch.ones(labels_points[ii].shape[0]).cpu(), save_base , imgs_ii, show_iou, show_boundary_iou)
-        
-        
-            loss_dict = {"val_iou_"+str(k): iou, "val_boundary_iou_"+str(k): boundary_iou}
-            loss_dict_reduced = misc.reduce_dict(loss_dict)
-            metric_logger.update(**loss_dict_reduced)
+                imgs_ii = imgs[0].astype(dtype=np.uint8)
+    
+                if args.prompt_type=='box':
+                    show_anns(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
+                elif args.prompt_type=='point':
+                    show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
+                        
+                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
+                loss_dict_reduced = misc.reduce_dict(loss_dict)
+                metric_logger.update(**loss_dict_reduced)
 
+            print('============================')
+            # gather the stats from all processes
+            metric_logger.synchronize_between_processes()
+            print("Averaged stats:", metric_logger)
+            resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
+            test_stats.update(resstat)
+            
+            text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
+            if misc.is_main_process():
+                with open(args.output+'/log.txt','a') as f:
+                    f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
+                    f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
 
-        print('============================')
-        # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger)
-        resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
-        test_stats.update(resstat)
-        
-        
-        text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
-        if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(str(misc.get_world_size()*len(valid_dataloader))+' '+ str(resstat)[1:-1]+'\n')    
-
-    return test_stats
-
-
-if __name__ == "__main__":
+        return test_stats
 
 if __name__ == "__main__":
 
@@ -794,8 +819,8 @@ if __name__ == "__main__":
             "im_ext": ".jpg"
             }
     dataset_camo = {"name": "camo",
-        "im_dir": "/data/tanglv/data/cod_test_data/CAMO/imgs",
-        "gt_dir": "/data/tanglv/data/cod_test_data/CAMO/gts",
+        "im_dir": "../data/CAMO/imgs",
+        "gt_dir": "../data/CAMO/gts",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
@@ -937,6 +962,8 @@ if __name__ == "__main__":
     args = get_args_parser()
     if not args.eval:
         args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type)
+    elif args.baseline:
+        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
     else:
         args.output = os.path.join(*args.restore_model.split('/')[:-1])
         
