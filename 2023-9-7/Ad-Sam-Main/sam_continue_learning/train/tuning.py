@@ -215,7 +215,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
         plt.imshow(image)
         show_mask(label_val/255.0, plt.gca(), label_mode=True) 
         plt.axis('off')
-        plt.savefig(filename+'_'+str(i)+'_gt.png',bbox_inches='tight',pad_inches=-0.1)
+        plt.savefig(filename+'_'+str(i)+'_gt.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close() 
         
         plt.figure(figsize=(10,10))
@@ -226,7 +226,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
         if (input_point is not None) and (input_label is not None): 
             show_points(input_point[i], input_label[i], plt.gca())
         plt.axis('off')
-        plt.savefig(filename+'_'+str(i)+'.png',bbox_inches='tight',pad_inches=-0.1)
+        plt.savefig(filename+'_'+str(i)+'.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
 
 def record_iou(filename, ious, boundary_ious):
@@ -270,6 +270,8 @@ def get_args_parser():
     
     parser.add_argument('--numworkers', type=int, default=-1)
     parser.add_argument("--restore-model", type=str,
+                        help="The path to the hq_decoder training checkpoint for evaluation")
+    parser.add_argument("--restore-sam-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
     parser.add_argument('--train-datasets', nargs='+')
     parser.add_argument('--valid-datasets', nargs='+')
@@ -315,7 +317,7 @@ def get_args_parser():
     parser.add_argument('--find_unused_params', action='store_true')
 
     # Output Setting
-    parser.add_argument("--output_prefix", type=str, required=True, 
+    parser.add_argument("--output_prefix", type=str, required=False, 
                         help="Path to the directory where masks and checkpoints will be output")
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--model_save_fre', default=1, type=int)
@@ -401,6 +403,13 @@ def main(train_datasets, valid_datasets, args):
     if args.compile: sam = torch.compile(sam)
     _ = sam.to(device=args.device)
     sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+    if args.restore_sam_model:
+        print("restore sam model from:", args.restore_sam_model)
+        if torch.cuda.is_available():
+            sam.module.load_state_dict(torch.load(args.restore_sam_model))
+        else:
+            sam.module.load_state_dict(torch.load(args.restore_sam_model,map_location="cpu"))
+    
     
     ### --- Step 3: Train or Evaluate ---    
     if not args.eval:
@@ -578,9 +587,10 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     print("Validating...")
     test_stats = {}
     dataset_id = -1
-    bad_examples = 0
+    
     for k in range(len(valid_dataloaders)):
         dataset_id += 1
+        bad_examples = 0
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
@@ -949,9 +959,10 @@ if __name__ == "__main__":
     args = get_args_parser()
     if not args.eval:
         args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type)
-    elif args.baseline:
-        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
-    else:
+    elif args.baseline: 
+        if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
+        else: args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
+    elif args.restore_model:
         args.output = os.path.join(*args.restore_model.split('/')[:-1])
         
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
