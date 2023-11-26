@@ -307,6 +307,7 @@ def get_args_parser():
     parser.add_argument('--train_img_num', default=11186, type=int)
     parser.add_argument('--batch_size_valid', default=1, type=int)
     parser.add_argument('--prompt_type', default='box')
+    parser.add_argument('--point_num', type=int, default=10)
     
     # DDP Setting
     parser.add_argument('--world_size', default=1, type=int,
@@ -417,7 +418,8 @@ def main(train_datasets, valid_datasets, args):
         print("--- define optimizer ---")
         optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
         if not args.slow_start:
-            lr_scheduler = StepLR(optimizer, args.lr_drop_epoch, last_epoch=args.start_epoch)
+            lr_scheduler = StepLR(optimizer, args.lr_drop_epoch)
+            lr_scheduler.last_epoch=args.start_epoch
         else:
             print("slow start & fast decay")
             lr_scheduler = LambdaLR(optimizer, lr_lambda)
@@ -627,7 +629,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
             if args.prompt_type=='point':        
                 try:
-                    labels_points = misc.masks_sample_points(labels_val) #[K*N 10 2]
+                    labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
                 except:
                     bad_examples+=1
                     loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
@@ -695,7 +697,11 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 continue    
         
             
-            save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
+            if args.prompt_type =='box':
+                save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
+            else:
+                save_dir = os.path.join(args.output, args.prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
+            
             Path(save_dir).mkdir(parents=True,exist_ok=True)
             base = ori_im_path[0].split('/')[-1].split('.')[0]
             save_base = os.path.join(save_dir, str(base))
@@ -719,6 +725,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
+        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') )
         
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
