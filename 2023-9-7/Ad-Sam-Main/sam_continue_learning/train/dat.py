@@ -238,7 +238,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
     if len(masks) == 0:
         return
 
-    print(masks.shape, len(ious), len(boundary_ious))
+    #print(masks.shape, len(ious), len(boundary_ious))
     for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
        
         plt.figure(figsize=(10,10))
@@ -258,6 +258,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
         plt.axis('off')
         plt.savefig(filename+'_'+str(i)+'.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
+    print("fig")
         
 def show_points(coords, labels, ax, marker_size=175):
     pos_points = coords[labels==1]
@@ -653,6 +654,8 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
             
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
             
+            #print(imgs.shape, labels_val.shape)
+            
             if args.prompt_type=='box': 
                 labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
             if args.prompt_type=='point':        
@@ -674,7 +677,7 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
                 dict_input['boxes'] = labels_box #N 4
             elif args.prompt_type == 'point': 
                 point_coords = labels_points #[N 10 2]
-                print(point_coords.shape)
+                #print(point_coords.shape)
                 dict_input['point_coords'] = point_coords
                 dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
             elif args.prompt_type == 'noise_mask':
@@ -685,12 +688,20 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
             dict_input['original_size'] = imgs[0].shape[:2]
             batched_input.append(dict_input)
 
-            batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
-        
+            print(point_coords.shape)
+            try:
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
+            except:
+                bad_examples += 1
+                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
+                loss_dict_reduced = misc.reduce_dict(loss_dict)
+                metric_logger.update(**loss_dict_reduced)
+                continue
             masks = batched_output[0]['low_res_logits']
 
-            print(masks.shape,labels_ori.shape)
+            #print(masks.shape,labels_ori.shape)
             
+            #print("sb")
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
                 boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
@@ -701,10 +712,8 @@ def evaluate(args, sam, valid_dataloaders, visualize=False):
                 metric_logger.update(**loss_dict_reduced)
                 continue
             
+            #print(iou)
             if torch.isnan(iou).any() or torch.isnan(boundary_iou).any():
-                iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
-                boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
-            else:
                 bad_examples += 1
                 loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
                 loss_dict_reduced = misc.reduce_dict(loss_dict)

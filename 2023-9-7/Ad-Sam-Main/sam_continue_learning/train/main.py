@@ -297,13 +297,14 @@ def get_args_parser():
     # Slow start & Fast decay
     parser.add_argument('--warmup_epoch', default=5, type=int)
     parser.add_argument('--gamma', default=0.5, type=float)
-    parser.add_argument('--slow_fast', action='store_true')
+    parser.add_argument('--slow_start', action='store_true')
     
-    # Inpit Setting
+    # Input Setting
     parser.add_argument('--input_size', default=[1024,1024], type=list)
     parser.add_argument('--batch_size_train', default=1, type=int)
     parser.add_argument('--batch_size_prompt_start', default=0, type=int)
     parser.add_argument('--batch_size_prompt', default=-1, type=int)
+    parser.add_argument('--train_img_num', default=11186, type=int)
     parser.add_argument('--batch_size_valid', default=1, type=int)
     parser.add_argument('--prompt_type', default='box')
     
@@ -347,7 +348,7 @@ def main(train_datasets, valid_datasets, args):
     ### --- Step 1: Train or Valid dataset ---
     if not args.eval:
         print("--- create training dataloader ---")
-        train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train")
+        train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train", limit=args.train_img_num)
         train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
                                                         my_transforms = [
                                                                     RandomHFlip(),
@@ -396,8 +397,8 @@ def main(train_datasets, valid_datasets, args):
     
     sam_checkpoint_map = {
         'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': '../pretrained_checkpoint/sam_vit_l_0b3195.pth',
+        'vit_h': '../pretrained_checkpoint/sam_vit_h_4b8939.pth',
     }
     sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
     if args.compile: sam = torch.compile(sam)
@@ -416,7 +417,8 @@ def main(train_datasets, valid_datasets, args):
         print("--- define optimizer ---")
         optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
         if not args.slow_start:
-            lr_scheduler = StepLR(optimizer, args.lr_drop_epoch, last_epoch=args.start_epoch)
+            lr_scheduler = StepLR(optimizer, args.lr_drop_epoch)
+            lr_scheduler.last_epoch = args.start_epoch
         else:
             print("slow start & fast decay")
             lr_scheduler = LambdaLR(optimizer, lr_lambda)
@@ -542,13 +544,23 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     
     # merge sam and tune_decoder
     if misc.is_main_process():
+        
+        
+        
+        sam_checkpoint_map = {
+        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        }
+        sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
         sam_ckpt = torch.load(args.checkpoint)
+        
         hq_decoder = torch.load(args.output + model_name)
         for key in hq_decoder.keys():
-            sam_key = 'mask_decoder.'+key
-            if sam_key not in sam_ckpt.keys():
+            if 'mask_token' in key or 'iou_token' in key:
+                sam_key = 'mask_decoder.'+key
                 sam_ckpt[sam_key] = hq_decoder[key]
-        model_name = "/sam_tuning_epoch_"+str(epoch)+".pth"
+        model_name = "/asam_epoch_"+str(epoch)+".pth"
         torch.save(sam_ckpt, args.output + model_name)
 
 @torch.no_grad()
@@ -965,7 +977,7 @@ if __name__ == "__main__":
     
     args = get_args_parser()
     if not args.eval:
-        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type)
+        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type+'-'+str(args.train_img_num))
     elif args.baseline: 
         if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
         else: args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
