@@ -151,3 +151,5 @@ dmypy.json
 *.ckpt
 *.gif
 *.gz
+
+**/data/
