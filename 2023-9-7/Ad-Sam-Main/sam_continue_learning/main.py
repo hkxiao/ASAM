@@ -96,9 +96,9 @@ class MaskDecoder_Tuning(MaskDecoder):
         """
         assert model_type in ["vit_b","vit_l","vit_h"]
         
-        checkpoint_dict = {"vit_b":"../pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
-                           "vit_l":"../pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
-                           'vit_h':"../pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
+        checkpoint_dict = {"vit_b":"pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
+                           "vit_l":"pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
+                           'vit_h':"pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
         checkpoint_path = checkpoint_dict[model_type]
         self.load_state_dict(torch.load(checkpoint_path))
         print("Tune Decoder init from SAM MaskDecoder")
@@ -397,9 +397,9 @@ def main(train_datasets, valid_datasets, args):
     
     
     sam_checkpoint_map = {
-        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_l_0b3195.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_h_4b8939.pth',
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_l_0b3195.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_h_4b8939.pth',
     }
     sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
     if args.compile: sam = torch.compile(sam)
@@ -741,74 +741,74 @@ if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
     dataset_sa000000 = {"name": "sam_subset",
-                "im_dir": "../../sam-1b/sa_000000",
-                "gt_dir": "../../sam-1b/sa_000000",
+                "im_dir": "../sam-1b/sa_000000",
+                "gt_dir": "../sam-1b/sa_000000",
                 "im_ext": ".jpg",
                 "gt_ext": ""}
     
     dataset_sa000000_512 = {"name": "sam_subset",
-            "im_dir": "../../sam-1b/sa_000000/512",
-            "gt_dir": "../../sam-1b/sa_000000",
+            "im_dir": "../sam-1b/sa_000000/512",
+            "gt_dir": "../sam-1b/sa_000000",
             "im_ext": ".jpg",
             "gt_ext": ""}
     
     dataset_sa000000adv = {"name": "sam_subset",
-            "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
-            "gt_dir": "../../sam-1b/sa_000000",
+            "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../sam-1b/sa_000000",
             "im_ext": ".png",
             "gt_ext": ""}
     
     dataset_sa000000adv_dice = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../../sam-1b/sa_000000",
+        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
         "gt_ext": ""}
     
     dataset_sa000001adv_dice = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000001-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../../sam-1b/sa_000001",
+        "im_dir": "../output/sa_000001-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000001",
         "im_ext": ".png",
         "gt_ext": ""}
     
     dataset_sa000000_Inversion = {"name": "sam_subset",
-            "im_dir": "../../output/sa_000000-Inversion/inv",
-            "gt_dir": "../../sam-1b/sa_000000",
+            "im_dir": "../output/sa_000000-Inversion/inv",
+            "gt_dir": "../sam-1b/sa_000000",
             "im_ext": ".png",
             "gt_ext": ""}
     
     dataset_sa000000adv_1600 = {"name": "sam_subset",
-            "im_dir": "../../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
-            "gt_dir": "../../sam-1b/sa_000000",
+            "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../sam-1b/sa_000000",
             "im_ext": ".png",
             "gt_ext": ""}
     
     dataset_sa000000inv = {"name": "sam_subset",
-        "im_dir": "../../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
-        "gt_dir": "/data/tanglv/data/sam-1b/sa_000000",
+        "im_dir": "../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
+        "gt_dir": "../../sam-1b/sa_000000",
         "im_ext": ".png",
         "gt_ext": ""}
             
     dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
-            "im_dir": "../../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
-            "gt_dir": "../../sam-1b/sa_000000",
+            "im_dir": "../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
+            "gt_dir": "../sam-1b/sa_000000",
             "im_ext": ".png",
             "gt_ext": ".json"}
     
     dataset_DatasetDM = {"name": "DatasetDM",
-            "im_dir": "../../data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
-            "gt_dir": "../../data/tanglv/xhk/DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
+            "im_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
+            "gt_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
             "im_ext": ".jpg",
             "gt_ext": ".jpg"}
     
     dataset_sa000000pgd = {"name": "sam_subset",
-            "im_dir": "../../data/tanglv/xhk/Ad-Sam-Main/sam_continue_learning/train/work_dirs/PGD",
-            "gt_dir": "../../sam-1b/sa_000000",
+            "im_dir": "work_dirs/PGD",
+            "gt_dir": "../sam-1b/sa_000000",
             "im_ext": ".jpg",
             "gt_ext": ".json"}
     
     dataset_sa00000pgd_512 = {"name": "sam_subset",
         "im_dir": "work_dirs/PGD_512",
-        "gt_dir": "../../sam-1b/sa_000000",
+        "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".jpg",
         "gt_ext": ""}
     
@@ -816,171 +816,171 @@ if __name__ == "__main__":
     
     # single
     dataset_hrsod_val = {"name": "HRSOD-TE",
-            "im_dir": "../data/HRSOD-TE/imgs",
-            "gt_dir": "../data/HRSOD-TE/gts",
+            "im_dir": "data/HRSOD-TE/imgs",
+            "gt_dir": "data/HRSOD-TE/gts",
             "im_ext": ".jpg",
             "gt_ext": ".png"}
 
-    #全景分割
+    
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
-            "im_dir": "../data/ADE20K_2016_07_26/images/validation",
-            "gt_dir": "../data/ADE20K_2016_07_26/images/validation",
+            "im_dir": "data/ADE20K_2016_07_26/images/validation",
+            "gt_dir": "data/ADE20K_2016_07_26/images/validation",
             "im_ext": ".jpg",
             "gt_ext": "_seg.png"}
-    #实列分割
+    
     dataset_cityscapes_val = {"name": "cityscaps_val",
-            "im_dir": "../data/cityscapes/leftImg8bit/val",
-            "gt_dir": "../data/cityscapes/gtFine/val",
+            "im_dir": "data/cityscapes/leftImg8bit/val",
+            "gt_dir": "data/cityscapes/gtFine/val",
             "im_ext": "_leftImg8bit.png",
             "gt_ext": "_gtFine_instanceIds.png"}
-    #实列分割
+    
     dataset_voc2012_val = {"name": "voc2012_val",
-            "im_dir": "../data/VOC2012/JPEGImages_val",
-            "gt_dir": "../data/VOC2012/SegmentationObject",
+            "im_dir": "data/VOC2012/JPEGImages_val",
+            "gt_dir": "data/VOC2012/SegmentationObject",
             "im_ext": ".jpg",
             "gt_ext": ".png"}
     #实列分割
     dataset_coco2017_val = {"name": "coco2017_val",
-            "im_dir": "../data/COCO2017-val/val2017",
-            "annotation_file": "../data/COCO2017-val/instances_val2017.json",
+            "im_dir": "data/COCO2017-val/val2017",
+            "annotation_file": "data/COCO2017-val/instances_val2017.json",
             "im_ext": ".jpg"
             }
     dataset_camo = {"name": "camo",
-        "im_dir": "/data/tanglv/data/cod_test_data/CAMO/imgs",
-        "gt_dir": "/data/tanglv/data/cod_test_data/CAMO/gts",
+        "im_dir": "data/CAMO/imgs",
+        "gt_dir": "data/CAMO/gts",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
     dataset_ishape_antenna = {"name": "ishape",
-        "im_dir": "../data/ishape_dataset/antenna/val/image",
-        "gt_dir": "../data/ishape_dataset/antenna/val/instance_map",
+        "im_dir": "data/ishape_dataset/antenna/val/image",
+        "gt_dir": "data/ishape_dataset/antenna/val/instance_map",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
     dataset_ppdls = {"name": "ppdls",
-        "im_dir": "../data/Plant_Phenotyping_Datasets",
-        "gt_dir": "../data/Plant_Phenotyping_Datasets",
+        "im_dir": "data/Plant_Phenotyping_Datasets",
+        "gt_dir": "data/Plant_Phenotyping_Datasets",
         "im_ext": "_rgb.png",
         "gt_ext": "_label.png"
         }
     
     dataset_gtea_train = {"name": "gtea",
-            "im_dir": "../data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
-            "gt_dir": "../data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+            "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+            "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
             "im_ext": ".jpg",
             "gt_ext": ".png"
         }
     
     dataset_streets = {"name": "streets_coco",
-        "im_dir": "../data/vehicleannotations/images",
-        "annotation_file": "../data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_dir": "data/vehicleannotations/images",
+        "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
         "im_ext": ".jpg",
     }
     
     dataset_TimberSeg = {"name": "timberseg_coco",
-        "im_dir": "..//data/y5npsm3gkj-2/prescaled/",
-        "annotation_file": "../data/y5npsm3gkj-2/prescaled/coco_annotation_rotated.json",
+        "im_dir": "data/y5npsm3gkj-2/prescaled/",
+        "annotation_file": "data/y5npsm3gkj-2/prescaled/coco_annotation_rotated.json",
         "im_ext": ".png",
     }
     
     dataset_ppdls = {"name": "ppdls",
-        "im_dir": "../data/Plant_Phenotyping_Datasets",
-        "gt_dir": "../data/Plant_Phenotyping_Datasets",
+        "im_dir": "data/Plant_Phenotyping_Datasets",
+        "gt_dir": "data/Plant_Phenotyping_Datasets",
         "im_ext": "_rgb.png",
         "gt_ext": "_label.png"
         }
     
     dataset_gtea_train = {"name": "gtea",
-        "im_dir": "../data/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "../data/GTEA_GAZE_PLUS/Masks",
+        "im_dir": "data/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "data/GTEA_GAZE_PLUS/Masks",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
     dataset_streets = {"name": "streets_coco",
-        "im_dir": "../data/vehicleannotations/images",
-        "annotation_file": "../data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_dir": "data/vehicleannotations/images",
+        "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
         "im_ext": ".jpg",
     }
     
     dataset_big_val = {"name": "big",
-        "im_dir": "../data/BIG/val",
-        "gt_dir": "../data/BIG/val",
+        "im_dir": "data/BIG/val",
+        "gt_dir": "data/BIG/val",
         "im_ext": "_im.jpg",
         "gt_ext": "_gt.png"
     }
     
     dataset_ndis_train = {"name": "ndis_park_coco",
-        "im_dir": "../data/ndis_park/train/imgs",
-        "annotation_file": "../data/ndis_park/train/train_coco_annotations.json",
+        "im_dir": "data/ndis_park/train/imgs",
+        "annotation_file": "data/ndis_park/train/train_coco_annotations.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
-        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/test.json",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
-        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/train.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
-        "im_dir": "../data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "../data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/val.json",
         "im_ext": ".jpg",
     }
     
         
     dataset_egohos = {"name": "egohos",
-        "im_dir": "../data/egohos/val/image",
-        "gt_dir": "../data/egohos/val/label",
+        "im_dir": "data/egohos/val/image",
+        "gt_dir": "data/egohos/val/label",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
     dataset_LVIS = {"name": "LVIS",
-        "im_dir": "../data/LVIS/val2017",
-        "annotation_file": "../data/LVIS/annotations/lvis_v1_val.json",
+        "im_dir": "data/LVIS/val2017",
+        "annotation_file": "data/LVIS/annotations/lvis_v1_val.json",
         "im_ext": ".jpg",
     }
     dataset_BBC038v1 = {"name": "BBC038v1",
-        "im_dir": "../data/BBC038V1-Train",
-        "annotation_file": "../data/BBC038V1-Train",
+        "im_dir": "data/BBC038V1-Train",
+        "annotation_file": "data/BBC038V1-Train",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
     dataset_DOORS1 = {"name": "DOORS1",
-        "im_dir": "../data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/img",
-        "gt_dir": "../data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/Rock_all",
+        "im_dir": "data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/img",
+        "gt_dir": "data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/Rock_all",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
     dataset_DOORS2 = {"name": "DOORS2",
-        "im_dir": "../data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/img",
-        "gt_dir": "../data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/Rock_all",
+        "im_dir": "data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/img",
+        "gt_dir": "data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/Rock_all",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
     
     dataset_NDD20_ABOVE = {"name": "NDD20_coco",
-        "im_dir": "../data/NDD20/ABOVE",
-        "annotation_file": "../data/NDD20/ABOVE_LABELS.json",
+        "im_dir": "data/NDD20/ABOVE",
+        "annotation_file": "data/NDD20/ABOVE_LABELS.json",
         "im_ext": ".jpg",
     }
     
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "../data/splits_final_deblurred/train/data",
-        "gt_dir": "../data/splits_final_deblurred/train/sem_seg",
+        "im_dir": "data/splits_final_deblurred/train/data",
+        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
