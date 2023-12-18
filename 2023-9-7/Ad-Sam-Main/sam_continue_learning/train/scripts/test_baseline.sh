@@ -1,8 +1,8 @@
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=ALL
 # export TORCH_DISTRIBUTED_DEBUG=INFO
-export CUDA_VISIBLE_DEVICES=6,7
-python -m torch.distributed.launch --nproc_per_node=2 --master_port=30007  tuning.py \
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+python -m torch.distributed.launch --nproc_per_node=4 --master_port=30007  tuning.py \
 --model-type vit_b \
 --output_prefix sam-baseline \
 --batch_size_train=8 \
@@ -11,10 +11,11 @@ python -m torch.distributed.launch --nproc_per_node=2 --master_port=30007  tunin
 --find_unused_params \
 --numworkers=0 \
 --eval \
---prompt_type point \
+--prompt_type box \
 --train-datasets dataset_sa000000 \
---valid-datasets dataset_LVIS \
---baseline
+--valid-datasets dataset_camo dataset_big_val dataset_hrsod_val \
+--baseline \
+--visualize
 # --visualize \
 # --baseline
 #--valid-datasets dataset_camo dataset_big_val dataset_BBC038v1 dataset_DOORS1 dataset_DOORS2 dataset_ZeroWaste dataset_ndis_train dataset_Plittersdorf_test dataset_egohos dataset_LVIS \

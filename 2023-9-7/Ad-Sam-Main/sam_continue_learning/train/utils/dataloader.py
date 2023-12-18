@@ -34,7 +34,7 @@ def collate(batch):
     
     return batch
 
-def get_im_gt_name_dict(datasets, flag='valid'):
+def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
     print("------------------------------", flag, "--------------------------------")
     name_im_gt_list = []
 
@@ -52,11 +52,16 @@ def get_im_gt_name_dict(datasets, flag='valid'):
                 "annotation_file": datasets[i]["annotation_file"]})
             print(datasets[i]["name"] + "continue")
             continue
+    
         
         tmp_im_list, tmp_gt_list = [], []
         for root, dirs, files in os.walk(datasets[i]["im_dir"]): 
             tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
-        
+
+        print(limit, flag,len(tmp_im_list))
+
+        if flag=='train' and limit!=-1 and len(tmp_im_list)>limit:
+            tmp_im_list=tmp_im_list[:limit]
         if "BBC038v1" in datasets[i]["name"]:   
             tmp_im_list = [x for x in tmp_im_list if 'masks' not in x]
             name_im_gt_list.append({"dataset_name":datasets[i]["name"],

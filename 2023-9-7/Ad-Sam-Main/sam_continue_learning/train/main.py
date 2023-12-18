@@ -544,10 +544,7 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     print("Training Reaches The Maximum Epoch Number")
     
     # merge sam and tune_decoder
-    if misc.is_main_process():
-        sam_ckpt = torch.load(args.checkpoint)
-        
-        
+    if misc.is_main_process():       
         sam_checkpoint_map = {
         'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
         'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
