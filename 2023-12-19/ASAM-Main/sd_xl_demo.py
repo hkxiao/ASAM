@@ -1,5 +1,6 @@
 import torch
 from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel
+from diffusers import StableDiffusionXLPipeline
 from diffusers import DDIMScheduler
 import time
 from PIL import Image
@@ -12,9 +13,14 @@ controlnet = ControlNetModel.from_pretrained(
 )
 controlnet = controlnet.to("cuda")
 
-ldm_stable = StableDiffusionXLControlNetPipeline.from_pretrained(
-    "ckpt/stable-diffusion-xl-base-1.0", controlnet=controlnet, torch_dtype=torch.float16
+# ldm_stable = StableDiffusionXLControlNetPipeline.from_pretrained(
+#     "ckpt/stable-diffusion-xl-base-1.0", controlnet=controlnet, torch_dtype=torch.float16
+# )
+
+ldm_stable = StableDiffusionXLPipeline.from_pretrained(
+    "ckpt/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16
 )
+
 ldm_stable = ldm_stable.to("cuda")
 ldm_stable.enable_model_cpu_offload()
 
@@ -32,7 +38,9 @@ canny_image.save('canny.jpg')
 controlnet_conditioning_scale=0.5
 
 start_time = time.time()
-image = ldm_stable(prompt, controlnet_conditioning_scale=controlnet_conditioning_scale, image=canny_image).images[0]
+#image = ldm_stable(prompt, controlnet_conditioning_scale=controlnet_conditioning_scale, image=canny_image).images[0]
+image = ldm_stable(prompt, controlnet_conditioning_scale=controlnet_conditioning_scale).images[0]
+
 
 print('time:' ,time.time()-start_time)
 image.save('control.jpg')

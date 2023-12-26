@@ -2,7 +2,8 @@ from typing import Optional, Union, Tuple, List, Callable, Dict
 from tqdm import tqdm, trange
 import torch
 import os
-from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionPipeline
 from diffusers import DDIMScheduler
 
 import torch.nn.functional as nnf
@@ -41,7 +42,7 @@ parser.add_argument('--check_inversion', action='store_true')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')   
 parser.add_argument('--guess_mode', action='store_true')   
-parser.add_argument('--guidence_scale', default=7.5, type=float, help='random seed')   
+parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed')   
 
 # path setting
 parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
@@ -373,6 +374,7 @@ class NullInversion:
                                   set_alpha_to_one=False)
         self.model = model
         self.tokenizer = self.model.tokenizer
+        self.tokenizer_2 = self.model.tokenizer_2
         self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
         self.prompt = None
         self.context = None
@@ -397,37 +399,23 @@ class NullInversion:
         next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
         return next_sample
     
-    def get_noise_pred_single(self, latents, mask, t, context):
-        if mask != None:
-            down_block_res_samples, mid_block_res_sample = self.model.controlnet(
-                        latents,
-                        t,
-                        encoder_hidden_states=context,
-                        controlnet_cond=mask,
-                        return_dict=False,
-                    )
-        else:
-            down_block_res_samples, mid_block_res_sample = None, None
-        
-        if down_block_res_samples!=None and args.guess_mode and mid_block_res_sample.shape[0]==2:
-            down_block_res_samples = [d[1:] for d in down_block_res_samples]
-            mid_block_res_sample =  mid_block_res_sample[1:]
-            down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-            mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
-                
-        noise_pred = self.model.unet(
-            latents, t, encoder_hidden_states=context,
-            down_block_additional_residuals=down_block_res_samples,
-            mid_block_additional_residual=mid_block_res_sample,)["sample"]
+    def get_noise_pred_single(self, latents, t, context, pooled_context, add_time_ids):
+        # print(latents.shape, context.shape)
+        # raise NameError
+        # print(pooled_context.device, add_time_ids.device, add_time_ids.device)
+        # raise NameError
+        added_cond_kwargs = {"text_embeds": pooled_context, "time_ids": add_time_ids}
+        noise_pred = self.model.unet(latents, t, encoder_hidden_states=context, added_cond_kwargs=added_cond_kwargs)["sample"]
         return noise_pred
 
-    def get_noise_pred(self, latents, mask, t, is_forward=True, context=None):
+    def get_noise_pred(self, latents, t, is_forward=True, context=None,pooled_context=None,add_time_ids=None):
         latents_input = torch.cat([latents] * 2)
         if context is None:
             context = self.context
+            pooled_context = self.pooled_prompt_embeds
+            add_time_ids = self.add_time_ids
         guidance_scale = 1 if is_forward else GUIDANCE_SCALE
-        # print(latents_input.shape, mask.shape, context.shape)
-        noise_pred = self.get_noise_pred_single(latents_input, mask, t, context)
+        noise_pred = self.get_noise_pred_single(latents_input, t, context, pooled_context, add_time_ids)
         
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
@@ -467,7 +455,17 @@ class NullInversion:
             [""], padding="max_length", max_length=self.model.tokenizer.model_max_length,
             return_tensors="pt"
         )
-        uncond_embeddings = self.model.text_encoder(uncond_input.input_ids.to(self.model.device))[0]
+        uncond_embeddings = self.model.text_encoder(uncond_input.input_ids.to(self.model.device),output_hidden_states=True).hidden_states[-2]
+        
+        uncond_input_2 = self.model.tokenizer_2(
+            [""], padding="max_length", max_length=self.model.tokenizer_2.model_max_length,
+            return_tensors="pt"
+        )
+        uncond_embeddings_2 = self.model.text_encoder_2(uncond_input_2.input_ids.to(self.model.device),output_hidden_states=True)
+        uncond_pooled_embeddings = uncond_embeddings_2[0]
+        uncond_embeddings_2 = uncond_embeddings_2.hidden_states[-2]
+        uncond_embeddings = torch.cat([uncond_embeddings,uncond_embeddings_2], -1)
+        
         text_input = self.model.tokenizer(
             [prompt],
             padding="max_length",
@@ -475,18 +473,47 @@ class NullInversion:
             truncation=True,
             return_tensors="pt",
         )
-        text_embeddings = self.model.text_encoder(text_input.input_ids.to(self.model.device))[0]
+        text_embeddings = self.model.text_encoder(text_input.input_ids.to(self.model.device),output_hidden_states=True).hidden_states[-2]
+        
+        text_input_2 = self.model.tokenizer_2(
+            [prompt],
+            padding="max_length",
+            max_length=self.model.tokenizer_2.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        text_embeddings_2 = self.model.text_encoder_2(text_input_2.input_ids.to(self.model.device), output_hidden_states=True)
+        text_pooled_embeddings = text_embeddings_2[0]
+        text_embeddings_2 = text_embeddings_2.hidden_states[-2]
+        
+        text_embeddings = torch.cat([text_embeddings, text_embeddings_2],-1)
         self.context = torch.cat([uncond_embeddings, text_embeddings])
+        self.pooled_prompt_embeds = torch.cat([uncond_pooled_embeddings, text_pooled_embeddings])
+        
+        #print(self.context.shape)
         self.prompt = prompt
+        
+        self.add_time_ids = self.model._get_add_time_ids(
+            original_size=(1024,1024),
+            crops_coords_top_left=(0,0),
+            target_size=(1024,1024),
+            dtype=self.model.text_encoder_2.dtype,
+            text_encoder_projection_dim=1280,
+        ).to(device)
+        self.negative_add_time_ids = self.add_time_ids
+        self.add_time_ids = torch.cat([self.negative_add_time_ids,self.add_time_ids],0)
 
     @torch.no_grad()
-    def ddim_loop(self, latent, mask):
+    def ddim_loop(self, latent):
         uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        uncond_pooled_embeddings, cond_pooled_embeddings = self.pooled_prompt_embeds.chunk(2)
+        uncond_add_time_ids, cond_add_time_ids = self.add_time_ids.chunk(2)
         all_latent = [latent]
+        
         latent = latent.clone().detach()
         for i in range(NUM_DDIM_STEPS):
             t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
-            noise_pred = self.get_noise_pred_single(latent, mask,t, cond_embeddings)
+            noise_pred = self.get_noise_pred_single(latent,t, cond_embeddings, cond_pooled_embeddings, cond_add_time_ids)
             latent = self.next_step(noise_pred ,t, latent)
             all_latent.append(latent)
         return all_latent
@@ -496,14 +523,17 @@ class NullInversion:
         return self.model.scheduler
 
     @torch.no_grad()
-    def ddim_inversion(self, image, mask):
+    def ddim_inversion(self, image):
         latent = self.image2latent(image)
         image_rec = self.latent2image(latent)
-        ddim_latents = self.ddim_loop(latent, mask)
+        ddim_latents = self.ddim_loop(latent)
         return image_rec, ddim_latents
 
-    def null_optimization(self, latents, mask, num_inner_steps, epsilon):
+    def null_optimization(self, latents, num_inner_steps, epsilon):
         uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        uncond_pooled_embeddings, cond_pooled_embeddings = self.pooled_prompt_embeds.chunk(2)
+        uncond_add_time_ids, cond_add_time_ids = self.add_time_ids.chunk(2)
+        
         uncond_embeddings_list = []
         latent_cur = latents[-1]
         bar = tqdm(total=num_inner_steps * NUM_DDIM_STEPS)
@@ -514,13 +544,9 @@ class NullInversion:
             latent_prev = latents[len(latents) - i - 2]
             t = self.model.scheduler.timesteps[i]
             with torch.no_grad():
-                noise_pred_cond = self.get_noise_pred_single(latent_cur, mask,t, cond_embeddings)
+                noise_pred_cond = self.get_noise_pred_single(latent_cur,t, cond_embeddings, cond_pooled_embeddings, cond_add_time_ids)
             for j in range(num_inner_steps):
-                if args.guess_mode:
-                    noise_pred_uncond = self.get_noise_pred_single(latent_cur, None, t, uncond_embeddings)
-                else:
-                    noise_pred_uncond = self.get_noise_pred_single(latent_cur, mask, t, uncond_embeddings)
-                
+                noise_pred_uncond = self.get_noise_pred_single(latent_cur, t, uncond_embeddings, uncond_pooled_embeddings, uncond_add_time_ids)
                 noise_pred = noise_pred_uncond + GUIDANCE_SCALE * (noise_pred_cond - noise_pred_uncond)
                 latents_prev_rec = self.prev_step(noise_pred, t, latent_cur)
                 loss = nnf.mse_loss(latents_prev_rec, latent_prev)
@@ -536,24 +562,25 @@ class NullInversion:
             uncond_embeddings_list.append(uncond_embeddings[:1].detach())
             with torch.no_grad():
                 context = torch.cat([uncond_embeddings, cond_embeddings])
-                masks = torch.cat([mask,mask])
-                latent_cur = self.get_noise_pred(latent_cur, masks, t, False, context)
+                pooled_context = torch.cat([uncond_pooled_embeddings,cond_pooled_embeddings])
+                add_time_ids = torch.cat([uncond_add_time_ids, cond_add_time_ids])
+                latent_cur = self.get_noise_pred(latent_cur, t, False, context,pooled_context,add_time_ids)
         bar.close()
         return uncond_embeddings_list
     
-    def invert(self, img_path: str, mask_control: torch.tensor ,prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
+    def invert(self, img_path: str,  prompt: str, offsets=(0,0,0,0), num_inner_steps=10, early_stop_epsilon=1e-5, verbose=False):
         self.init_prompt(prompt)
         ptp_utils.register_attention_control(self.model, None)
         
-        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt =  Image.open(img_path).convert('RGB').resize((1024,1024))
         image_gt = np.array(image_gt).astype(np.float32)
         
         if verbose:
             print("DDIM inversion...")
-        image_rec, ddim_latents = self.ddim_inversion(image_gt, mask_control)
+        image_rec, ddim_latents = self.ddim_inversion(image_gt)
         if verbose:
             print("Null-text optimization...")
-        uncond_embeddings = self.null_optimization(ddim_latents, mask_control, num_inner_steps, early_stop_epsilon)
+        uncond_embeddings = self.null_optimization(ddim_latents, num_inner_steps, early_stop_epsilon)
         return (image_gt, image_rec), ddim_latents[-1], uncond_embeddings
     
 
@@ -566,14 +593,13 @@ def text2image_ldm_stable(
     guidance_scale: Optional[float] = 7.5,
     generator: Optional[torch.Generator] = None,
     latent: Optional[torch.FloatTensor] = None,
-    mask_control: Optional[torch.tensor] = None,
     uncond_embeddings=None,
     start_time=50,
     return_type='image'
 ):
     batch_size = len(prompt)
     ptp_utils.register_attention_control(model, controller)
-    height = width = 512
+    height, width = 1024, 1024
     
     text_input = model.tokenizer(
         prompt,
@@ -582,7 +608,38 @@ def text2image_ldm_stable(
         truncation=True,
         return_tensors="pt",
     )
-    text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
+    text_embeddings = model.text_encoder(text_input.input_ids.to(model.device),output_hidden_states=True).hidden_states[-2]
+    
+    text_input_2 = model.tokenizer_2(
+        prompt,
+        padding="max_length",
+        max_length=model.tokenizer_2.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    )
+    text_embeddings_2 = model.text_encoder_2(text_input_2.input_ids.to(model.device), output_hidden_states=True)
+    text_pooled_embeddings = text_embeddings_2[0]
+    text_embeddings_2 = text_embeddings_2.hidden_states[-2]
+    text_embeddings = torch.cat([text_embeddings, text_embeddings_2],-1)
+    
+    uncond_input_2 = model.tokenizer_2(
+        [""], padding="max_length", max_length=model.tokenizer_2.model_max_length,
+        return_tensors="pt"
+    )
+    uncond_embeddings_2 = model.text_encoder_2(uncond_input_2.input_ids.to(model.device),output_hidden_states=True)
+    uncond_pooled_embeddings = uncond_embeddings_2[0]
+
+    pooled_context = torch.cat([uncond_pooled_embeddings,text_pooled_embeddings])    
+    add_time_ids = model._get_add_time_ids(
+        original_size=(1024,1024),
+        crops_coords_top_left=(0,0),
+        target_size=(1024,1024),
+        dtype=model.text_encoder_2.dtype,
+        text_encoder_projection_dim=1280,
+    ).to(device)
+    negative_add_time_ids = add_time_ids
+    add_time_ids = torch.cat([negative_add_time_ids,add_time_ids])
+    
     max_length = text_input.input_ids.shape[-1]
     if uncond_embeddings is None:
         uncond_input = model.tokenizer(
@@ -599,7 +656,7 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False,guess_mode=args.guess_mode)
+        latents = ptp_utils.diffusion_step(model, controller, latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False,guess_mode=args.guess_mode)
         
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
@@ -608,12 +665,12 @@ def text2image_ldm_stable(
     return image, latent
 
 
-def run_and_display(prompts, controller, latent=None, mask_control=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
+def run_and_display(prompts, controller, latent=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
     if run_baseline:
         print("w.o. prompt-to-prompt")
-        images, latent = run_and_display(prompts, EmptyControl(), latent=latent, mask_control=mask_control, run_baseline=False, generator=generator)
+        images, latent = run_and_display(prompts, EmptyControl(), latent=latent, run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, mask_control=mask_control,num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
+    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent,num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
@@ -624,7 +681,7 @@ def check_controlnet():
 
     control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     control_image = np.array(control_image)
-    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = cv2.resize(control_image, (1024,1024)) / 255.0
     
     output = ldm_stable(
     "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
@@ -635,7 +692,7 @@ def check_controlnet():
     output.save('check_controlnet_pth.png')
     
     controller = AttentionStore()
-    x_t = torch.randn((1, ldm_stable.unet.in_channels,  512// 8, 512 // 8))
+    x_t = torch.randn((1, ldm_stable.unet.in_channels,  1024// 8, 1024 // 8))
     run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=True, prefix='check_controlnet_use')
 
 def check_inversion():
@@ -649,7 +706,7 @@ def check_inversion():
     
     control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     control_image = np.array(control_image)
-    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = cv2.resize(control_image, (1024,1024)) / 255.0
     control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
     controller = AttentionStore()
     
@@ -660,17 +717,19 @@ if __name__ == '__main__':
     MY_TOKEN = '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'
     LOW_RESOURCE = False 
     NUM_DDIM_STEPS = args.ddim_steps
-    GUIDANCE_SCALE = args.guidence_scale
+    GUIDANCE_SCALE = args.guidance_scale
     MAX_NUM_WORDS = 77
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')    
+    ldm_stable = StableDiffusionXLPipeline.from_pretrained("ckpt/stable-diffusion-xl-base-1.0", use_auth_token=MY_TOKEN, scheduler=scheduler).to(device)
+    
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
         print("Attribute disable_xformers_memory_efficient_attention() is missing")
     tokenizer = ldm_stable.tokenizer
-    
+    tokenizer_2 = ldm_stable.tokenizer_2
+    # print(ldm_stable.tokenizer.model_max_length)
+    # raise NameError
     # Load null text inversion
     null_inversion = NullInversion(ldm_stable)
     
@@ -682,12 +741,14 @@ if __name__ == '__main__':
             json_dict = json.loads(line.strip()) 
             captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
             
-    # Check controlnet & inversion
-    if args.check_controlnet: check_controlnet()
-    if args.check_inversion: check_inversion()
-    if args.check_inversion or args.check_controlnet: raise NameError 
+    # Check inversion
+    if args.check_inversion: 
+        check_inversion()
+        raise NameError 
     
     # Prepare save dir
+    
+    args.save_root = args.save_root + '/' + 'SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) + '-INV-' + str(args.steps) 
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(os.path.join(args.save_root , 'pair')): os.mkdir(os.path.join(args.save_root , 'pair'))
     if not os.path.exists(os.path.join(args.save_root , 'inv')): os.mkdir(os.path.join(args.save_root , 'inv'))
@@ -714,15 +775,9 @@ if __name__ == '__main__':
         prompt = captions[img_path.split('/')[-1]]
         print(prompt)
         
-        # load control mask
-        mask_control = cv2.imread(control_mask_path).astype(np.float32)
-        mask_control = cv2.cvtColor(mask_control, cv2.COLOR_BGR2RGB)
-        mask_control = cv2.resize(mask_control, (512,512)) / 255.0
-        mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
-        
         # null text inversion
         start = time.time()
-        (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
+        (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
         print('Inversion Time:', time.time() - start)
         gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)
         
@@ -732,6 +787,6 @@ if __name__ == '__main__':
         
         # show 
         controller = AttentionStore()
-        image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
+        image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t ,uncond_embeddings=uncond_embeddings, verbose=False)
         ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}', shuffix='.jpg')
         ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/sa_{i}', shuffix='.png')
