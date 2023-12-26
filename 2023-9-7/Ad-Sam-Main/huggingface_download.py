@@ -3,7 +3,7 @@ from modelscope.pipelines import pipeline
 import cv2
 
 pipe = pipeline(task=Tasks.text_to_image_synthesis, 
-                model='AI-ModelScope/stable-diffusion-xl-refiner-1.0',
+                model='AI-ModelScope/stable-diffusion-xl-base-1.0',
                 use_safetensors=True,
                 model_revision='v1.0.0')
 

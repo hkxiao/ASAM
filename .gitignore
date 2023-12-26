@@ -150,3 +150,6 @@ dmypy.json
 **/sam-subset-11187/
 *.ckpt
 *.gif
+*.gz
+
+**/data/
