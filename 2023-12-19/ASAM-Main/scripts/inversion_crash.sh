@@ -6,16 +6,16 @@ start_program() {
     --data_root=sam-1b/sa_000000 \
     --caption_path=sam-1b/sa_000000-blip2-caption.json \
     --guidance_scale=7.5 \
-    --steps=10 \
+    --steps=5 \
     --ddim_steps=50 \
     --start=$3 \
     --end=$4  
 }
 
 # 设置GPU列表
-CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
-start=(1 500 1000 1500 2000 2500 3002 3500)
-end=(500 1000 1500 2000 2500 3000 3500 4000)
+CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5  7)
+start=(4000 4500 5000 5500 6000 6500 7000 7500)
+end=(4500 5000 5500 6000 6500 7000 7500 8000)
 
 PID_LIST=()
 STATUS=()
@@ -53,5 +53,5 @@ do
     if [ $finish == true ]; then
         break
     fi
-    sleep 5
+    sleep 30
 done
