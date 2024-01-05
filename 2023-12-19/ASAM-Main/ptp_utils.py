@@ -63,14 +63,17 @@ def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.
 
 def get_noise_pred(model, latents, t, context, pooled_context, add_time_ids):        
     added_cond_kwargs = {"text_embeds": pooled_context, "time_ids": add_time_ids}
+    
+    print(latents.dtype, t.dtype, context.dtype, pooled_context.dtype, add_time_ids.dtype)
+    # raise NameError
     noise_pred = model.unet(
         latents, t, encoder_hidden_states=context,added_cond_kwargs=added_cond_kwargs)["sample"]
     return noise_pred
 
 def diffusion_step(model, controller, latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False, guess_mode=False):
     if low_resource:
-        noise_pred_uncond = get_noise_pred(model,latents, t, context==context[0])
-        noise_prediction_text = get_noise_pred(model, latents, t, context=context[1])
+        noise_pred_uncond = get_noise_pred(model,latents, t, context[0:1],pooled_context[0:1],add_time_ids[0:1])
+        noise_prediction_text = get_noise_pred(model, latents, t, context[1:],pooled_context[1:],add_time_ids[1:])
     else:
         #print("Latent: ", latents.shape, latents.requires_grad)
         latents_input = torch.cat([latents] * 2)
