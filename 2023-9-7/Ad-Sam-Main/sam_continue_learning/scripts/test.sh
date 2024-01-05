@@ -12,7 +12,7 @@ python -m torch.distributed.launch --nproc_per_node=8 --master_port=30001  main.
 --numworkers=0 \
 --restore-model work_dirs/diceloss_sam_iou_masktoken-tuning_b_adv@4/epoch_9.pth \
 --eval \
---prompt_type point \
+--prompt_type box \
 --train-datasets dataset_sa000000 \
 --valid-datasets dataset_egohos \
 # --visualize \
