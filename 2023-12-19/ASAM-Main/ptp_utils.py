@@ -61,10 +61,10 @@ def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.
     display(pil_img)
     pil_img.save(prefix + shuffix)
 
-def get_noise_pred(model, latents, t, context, pooled_context, add_time_ids):        
+def get_noise_pred(model, latents, t, context, pooled_context, add_time_ids):            
     added_cond_kwargs = {"text_embeds": pooled_context, "time_ids": add_time_ids}
     
-    print(latents.dtype, t.dtype, context.dtype, pooled_context.dtype, add_time_ids.dtype)
+    #print(latents.dtype, t.dtype, context.dtype, pooled_context.dtype, add_time_ids.dtype)
     # raise NameError
     noise_pred = model.unet(
         latents, t, encoder_hidden_states=context,added_cond_kwargs=added_cond_kwargs)["sample"]
@@ -86,6 +86,49 @@ def diffusion_step(model, controller, latents, context, t, guidance_scale, poole
     latents = model.scheduler.step(noise_pred, t, latents)["prev_sample"]
     latents = controller.step_callback(latents)
     return latents
+
+
+def get_noise_pred_control(model, control_mask,latents, t, context, pooled_context, add_time_ids):    
+    added_cond_kwargs = {"text_embeds": pooled_context, "time_ids": add_time_ids}
+    
+    down_block_res_samples, mid_block_res_sample = model.controlnet(
+            latents,
+            t,
+            encoder_hidden_states=context,
+            controlnet_cond=control_mask,
+            added_cond_kwargs=added_cond_kwargs,
+            return_dict=False,
+        )
+        
+    #print(latents.dtype, t.dtype, context.dtype, pooled_context.dtype, add_time_ids.dtype)
+    # raise NameError
+    noise_pred = model.unet(
+        latents, t, encoder_hidden_states=context,added_cond_kwargs=added_cond_kwargs,\
+            down_block_res_samples=down_block_res_samples,mid_block_res_sample=mid_block_res_sample)["sample"]
+    return noise_pred
+
+def diffusion_step_control(model, controller, control_mask,latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False, guess_mode=False):
+    if low_resource:
+        noise_pred_uncond = get_noise_pred_control(model,control_mask,latents, t, context[0:1],pooled_context[0:1],add_time_ids[0:1])
+        noise_prediction_text = get_noise_pred_control(model, control_mask,latents, t, context[1:],pooled_context[1:],add_time_ids[1:])
+    else:
+        #print("Latent: ", latents.shape, latents.requires_grad)
+        latents_input = torch.cat([latents] * 2)
+        control_mask = torch.cat([control_mask]*2)
+        #print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
+        
+        print(control_mask.shape,pooled_context.shape)
+        noise_pred = get_noise_pred_control(model,control_mask,latents_input, t, context, pooled_context, add_time_ids)
+        noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
+        
+    noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
+    latents = model.scheduler.step(noise_pred, t, latents)["prev_sample"]
+    latents = controller.step_callback(latents)
+    return latents
+
+
+
+
 
 def latent2image(vae, latents):
     latents = 1 / 0.18215 * latents
