@@ -707,6 +707,6 @@ if __name__ == '__main__':
         # show 
         controller = EmptyControl()
         image_control, x_t = run_and_display_control(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, control_mask=control_mask, control_scale=args.control_scale, uncond_embeddings=uncond_embeddings, verbose=False)
-        ptp_utils.view_images([img, image_control[0],mask_show], prefix=f'{save_path}/pair/sa_{i}', shuffix='.jpg')
+        ptp_utils.view_images([img,inv_img,grad_img, image_control[0],mask_show], prefix=f'{save_path}/pair/sa_{i}', shuffix='.jpg')
         ptp_utils.view_images([image_control[0]], prefix=f'{save_path}/adv/sa_{i}', shuffix='.png')
         
