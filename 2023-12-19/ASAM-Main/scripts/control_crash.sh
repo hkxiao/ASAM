@@ -10,16 +10,16 @@ start_program() {
     --grad_dir=output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-160-ADV-0.4-4-0.1-0.5-100.0-100.0-1.0-2/ \
     --control_mask_dir=sam-1b/sa_000000 \
     --controlnet_path=ControlNet-main/train_output_sdxl/checkpoint-15000/controlnet \
-    --ddim_steps=1 \
-    --control_scale=0.0 \
+    --ddim_steps=50 \
+    --control_scale=1.0 \
     --start=$3 \
     --end=$4
 }
 
 # 设置GPU列表
-CUDA_VISIBLE_DEVICES_LIST=(1)
-start=(4000 500 1000 1500)
-end=(4001 1000 1500 2000)
+CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6)
+start=(8000 8500 9000 9500 10000 10500 11000)
+end=(8500 9000 9500 10000 10500 11000 11187)
 
 PID_LIST=()
 STATUS=()
