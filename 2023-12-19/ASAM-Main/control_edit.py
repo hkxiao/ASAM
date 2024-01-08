@@ -35,7 +35,7 @@ parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
 parser.add_argument('--guess_mode', action='store_true')   
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
 parser.add_argument('--random_latent', action='store_true')
-
+parser.add_argument('--control_scale', type=float, default=1.0)
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
@@ -485,7 +485,8 @@ def text2image_ldm_stable_control(
     guidance_scale: Optional[float] = 7.5,
     generator: Optional[torch.Generator] = None,
     latent: Optional[torch.FloatTensor] = None,
-    mask_control: Optional[torch.tensor] = None,
+    control_mask: Optional[torch.tensor] = None,
+    control_scale=1.0,
     uncond_embeddings=None,
     start_time=50,
     return_type='image'
@@ -549,7 +550,7 @@ def text2image_ldm_stable_control(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step_control(model, controller, control_mask,latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False,guess_mode=args.guess_mode)
+        latents = ptp_utils.diffusion_step_control(model, controller, control_mask, control_scale, latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False,guess_mode=args.guess_mode)
         
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
@@ -558,12 +559,12 @@ def text2image_ldm_stable_control(
     return image, latent
 
 
-def run_and_display_control(prompts, controller, latent=None, mask_control=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
+def run_and_display_control(prompts, controller, latent=None, control_mask=None,control_scale=1.0, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
     if run_baseline:
         print("w.o. prompt-to-prompt")
-        images, latent = run_and_display_control(prompts, EmptyControl(), latent=latent, mask_control=mask_control, run_baseline=False, generator=generator)
+        images, latent = run_and_display_control(prompts, EmptyControl(), latent=latent, control_mask=control_mask, control_scale=control_scale ,run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = text2image_ldm_stable_control(ldm_stable, prompts, controller, latent=latent, mask_control=mask_control,num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
+    images, x_t = text2image_ldm_stable_control(ldm_stable, prompts, controller, latent=latent, control_mask=control_mask,control_scale=control_scale ,num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
@@ -609,9 +610,6 @@ def check_inversion():
 
 
 if __name__ == '__main__':
-
-    torch.cuda.empty_cache()
-
     # Load Stable Diffusion & ControlNet
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     MY_TOKEN = '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'
@@ -621,7 +619,6 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
-    print(device)
     controlnet = ControlNetModel.from_pretrained(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionXLControlNetPipeline.from_pretrained("ckpt/stable-diffusion-xl-base-1.0", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     
@@ -644,9 +641,9 @@ if __name__ == '__main__':
     if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save path
-    save_path = args.save_root + '/' + args.grad_dir.split('/')[-1]
+    save_path = args.save_root + '/' + args.grad_dir.split('/')[2]
+    save_path = save_path + '-Control-' + str(args.control_scale)
     
-    print("Save Path:", save_path)
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(save_path): os.mkdir(save_path)
     if not os.path.exists(os.path.join(save_path,'pair')): os.mkdir(os.path.join(save_path,'pair'))
@@ -657,8 +654,11 @@ if __name__ == '__main__':
         
         # prepare img & mask path
         img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
+        inv_img_path = args.inversion_dir+'/inv/'+'sa_'+str(i)+'.png'
+        grad_img_path = args.grad_dir+'/adv/'+'sa_'+str(i)+'.png'
         control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
 
+        print(grad_img_path,inv_img_path)
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
@@ -672,13 +672,23 @@ if __name__ == '__main__':
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = cv2.resize(img, (1024,1024))
         
+        # load inv image
+        inv_img = cv2.imread(inv_img_path)
+        inv_img = cv2.cvtColor(inv_img, cv2.COLOR_BGR2RGB)
+        inv_img = cv2.resize(inv_img, (1024,1024))
+        
+        # load image
+        grad_img = cv2.imread(grad_img_path)
+        grad_img = cv2.cvtColor(grad_img, cv2.COLOR_BGR2RGB)
+        grad_img = cv2.resize(grad_img, (1024,1024))
+        
         # load caption
         prompt = captions[img_path.split('/')[-1]]
         print(prompt)
         
         # load x_t & uncondition embeddings 
-        latent_path = f"{args.grad_dir}/sa_{i}_latent.pth"
-        uncond_path = f"{args.inversion_dir}/sa_{i}_uncond.pth"
+        latent_path = f"{args.grad_dir}/embeddings/sa_{i}_latent.pth"
+        uncond_path = f"{args.inversion_dir}/embeddings/sa_{i}_uncond.pth"
         
         if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
             print(latent_path, uncond_path, "do not exist!")
@@ -696,7 +706,7 @@ if __name__ == '__main__':
         
         # show 
         controller = EmptyControl()
-        image_control, x_t = run_and_display_control(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_mask,uncond_embeddings=uncond_embeddings, verbose=False)
-        ptp_utils.view_images([img, image_control[0],mask_show], prefix=f'{args.save_root}/pair/sa_{i}', shuffix='.jpg')
-        ptp_utils.view_images([image_control[0]], prefix=f'{args.save_root}/inv/sa_{i}', shuffix='.png')
+        image_control, x_t = run_and_display_control(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, control_mask=control_mask, control_scale=args.control_scale, uncond_embeddings=uncond_embeddings, verbose=False)
+        ptp_utils.view_images([img,inv_img,grad_img, image_control[0],mask_show], prefix=f'{save_path}/pair/sa_{i}', shuffix='.jpg')
+        ptp_utils.view_images([image_control[0]], prefix=f'{save_path}/adv/sa_{i}', shuffix='.png')
         

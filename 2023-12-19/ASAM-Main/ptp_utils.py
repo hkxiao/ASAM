@@ -88,7 +88,7 @@ def diffusion_step(model, controller, latents, context, t, guidance_scale, poole
     return latents
 
 
-def get_noise_pred_control(model, control_mask,latents, t, context, pooled_context, add_time_ids):    
+def get_noise_pred_control(model, control_mask,control_scale,latents, t, context, pooled_context, add_time_ids):    
     added_cond_kwargs = {"text_embeds": pooled_context, "time_ids": add_time_ids}
     
     down_block_res_samples, mid_block_res_sample = model.controlnet(
@@ -96,6 +96,7 @@ def get_noise_pred_control(model, control_mask,latents, t, context, pooled_conte
             t,
             encoder_hidden_states=context,
             controlnet_cond=control_mask,
+            conditioning_scale=control_scale,
             added_cond_kwargs=added_cond_kwargs,
             return_dict=False,
         )
@@ -104,10 +105,10 @@ def get_noise_pred_control(model, control_mask,latents, t, context, pooled_conte
     # raise NameError
     noise_pred = model.unet(
         latents, t, encoder_hidden_states=context,added_cond_kwargs=added_cond_kwargs,\
-            down_block_res_samples=down_block_res_samples,mid_block_res_sample=mid_block_res_sample)["sample"]
+            down_block_additional_residuals=down_block_res_samples,mid_block_additional_residual=mid_block_res_sample)["sample"]
     return noise_pred
 
-def diffusion_step_control(model, controller, control_mask,latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False, guess_mode=False):
+def diffusion_step_control(model, controller, control_mask, control_scale,latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False, guess_mode=False):
     if low_resource:
         noise_pred_uncond = get_noise_pred_control(model,control_mask,latents, t, context[0:1],pooled_context[0:1],add_time_ids[0:1])
         noise_prediction_text = get_noise_pred_control(model, control_mask,latents, t, context[1:],pooled_context[1:],add_time_ids[1:])
@@ -118,7 +119,7 @@ def diffusion_step_control(model, controller, control_mask,latents, context, t, 
         #print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
         
         print(control_mask.shape,pooled_context.shape)
-        noise_pred = get_noise_pred_control(model,control_mask,latents_input, t, context, pooled_context, add_time_ids)
+        noise_pred = get_noise_pred_control(model,control_mask, control_scale ,latents_input, t, context, pooled_context, add_time_ids)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         
     noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
