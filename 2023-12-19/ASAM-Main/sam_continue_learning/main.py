@@ -546,9 +546,9 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     # merge sam and tune_decoder
     if misc.is_main_process():        
         sam_checkpoint_map = {
-        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
         }
         sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
 
@@ -740,79 +740,12 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
 if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
-    dataset_sa000000 = {"name": "sam_subset",
-                "im_dir": "../sam-1b/sa_000000",
+    dataset_sa000000_control = {"name": "sam_subset",
+                "im_dir": "../output/sa_000000-Control/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-160-ADV-0.4-4-0.1-0.5-100.0-100.0-1.0-2-Control-1.0/adv",
                 "gt_dir": "../sam-1b/sa_000000",
-                "im_ext": ".jpg",
+                "im_ext": ".png",
                 "gt_ext": ""}
     
-    dataset_sa000000_512 = {"name": "sam_subset",
-            "im_dir": "../sam-1b/sa_000000/512",
-            "gt_dir": "../sam-1b/sa_000000",
-            "im_ext": ".jpg",
-            "gt_ext": ""}
-    
-    dataset_sa000000adv = {"name": "sam_subset",
-            "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
-            "gt_dir": "../sam-1b/sa_000000",
-            "im_ext": ".png",
-            "gt_ext": ""}
-    
-    dataset_sa000000adv_dice = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000001adv_dice = {"name": "sam_subset",
-        "im_dir": "../output/sa_000001-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000001",
-        "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000_Inversion = {"name": "sam_subset",
-            "im_dir": "../output/sa_000000-Inversion/inv",
-            "gt_dir": "../sam-1b/sa_000000",
-            "im_ext": ".png",
-            "gt_ext": ""}
-    
-    dataset_sa000000adv_1600 = {"name": "sam_subset",
-            "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
-            "gt_dir": "../sam-1b/sa_000000",
-            "im_ext": ".png",
-            "gt_ext": ""}
-    
-    dataset_sa000000inv = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
-        "gt_dir": "../../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-            
-    dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
-            "im_dir": "../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
-            "gt_dir": "../sam-1b/sa_000000",
-            "im_ext": ".png",
-            "gt_ext": ".json"}
-    
-    dataset_DatasetDM = {"name": "DatasetDM",
-            "im_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
-            "gt_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
-            "im_ext": ".jpg",
-            "gt_ext": ".jpg"}
-    
-    dataset_sa000000pgd = {"name": "sam_subset",
-            "im_dir": "work_dirs/PGD",
-            "gt_dir": "../sam-1b/sa_000000",
-            "im_ext": ".jpg",
-            "gt_ext": ".json"}
-    
-    dataset_sa00000pgd_512 = {"name": "sam_subset",
-        "im_dir": "work_dirs/PGD_512",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".jpg",
-        "gt_ext": ""}
-    
-    # valid set
     
     # single
     dataset_hrsod_val = {"name": "HRSOD-TE",

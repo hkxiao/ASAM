@@ -651,62 +651,63 @@ if __name__ == '__main__':
     
     # Adversarial grad loop
     for i in trange(args.start, args.end+1):
-        
-        # prepare img & mask path
-        img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
-        inv_img_path = args.inversion_dir+'/inv/'+'sa_'+str(i)+'.png'
-        grad_img_path = args.grad_dir+'/adv/'+'sa_'+str(i)+'.png'
-        control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
+        try:
+            # prepare img & mask path
+            img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
+            inv_img_path = args.inversion_dir+'/inv/'+'sa_'+str(i)+'.png'
+            grad_img_path = args.grad_dir+'/adv/'+'sa_'+str(i)+'.png'
+            control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
 
-        print(grad_img_path,inv_img_path)
-        if not os.path.exists(img_path):
-            print(img_path, "does not exist!")
-            continue
-        
-        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
-            print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
-            continue
-        
-        # load image
-        img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (1024,1024))
-        
-        # load inv image
-        inv_img = cv2.imread(inv_img_path)
-        inv_img = cv2.cvtColor(inv_img, cv2.COLOR_BGR2RGB)
-        inv_img = cv2.resize(inv_img, (1024,1024))
-        
-        # load image
-        grad_img = cv2.imread(grad_img_path)
-        grad_img = cv2.cvtColor(grad_img, cv2.COLOR_BGR2RGB)
-        grad_img = cv2.resize(grad_img, (1024,1024))
-        
-        # load caption
-        prompt = captions[img_path.split('/')[-1]]
-        print(prompt)
-        
-        # load x_t & uncondition embeddings 
-        latent_path = f"{args.grad_dir}/embeddings/sa_{i}_latent.pth"
-        uncond_path = f"{args.inversion_dir}/embeddings/sa_{i}_uncond.pth"
-        
-        if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
-            print(latent_path, uncond_path, "do not exist!")
-            continue
-        else:
-            x_t = torch.load(latent_path).cuda()
-            uncond_embeddings = torch.load(uncond_path).cuda()
-        
-        # load control mask    
-        control_mask = cv2.imread(control_mask_path)
-        control_mask = cv2.cvtColor(control_mask, cv2.COLOR_BGR2RGB)
-        control_mask = cv2.resize(control_mask, (1024,1024))
-        mask_show = control_mask.copy()
-        control_mask = torch.from_numpy(control_mask).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda() / 255.0
-        
-        # show 
-        controller = EmptyControl()
-        image_control, x_t = run_and_display_control(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, control_mask=control_mask, control_scale=args.control_scale, uncond_embeddings=uncond_embeddings, verbose=False)
-        ptp_utils.view_images([img,inv_img,grad_img, image_control[0],mask_show], prefix=f'{save_path}/pair/sa_{i}', shuffix='.jpg')
-        ptp_utils.view_images([image_control[0]], prefix=f'{save_path}/adv/sa_{i}', shuffix='.png')
-        
+            print(grad_img_path,inv_img_path)
+            if not os.path.exists(img_path):
+                print(img_path, "does not exist!")
+                continue
+            
+            if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
+                print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
+                continue
+            
+            # load image
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, (1024,1024))
+            
+            # load inv image
+            inv_img = cv2.imread(inv_img_path)
+            inv_img = cv2.cvtColor(inv_img, cv2.COLOR_BGR2RGB)
+            inv_img = cv2.resize(inv_img, (1024,1024))
+            
+            # load image
+            grad_img = cv2.imread(grad_img_path)
+            grad_img = cv2.cvtColor(grad_img, cv2.COLOR_BGR2RGB)
+            grad_img = cv2.resize(grad_img, (1024,1024))
+            
+            # load caption
+            prompt = captions[img_path.split('/')[-1]]
+            print(prompt)
+            
+            # load x_t & uncondition embeddings 
+            latent_path = f"{args.grad_dir}/embeddings/sa_{i}_latent.pth"
+            uncond_path = f"{args.inversion_dir}/embeddings/sa_{i}_uncond.pth"
+            
+            if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
+                print(latent_path, uncond_path, "do not exist!")
+                continue
+            else:
+                x_t = torch.load(latent_path).cuda()
+                uncond_embeddings = torch.load(uncond_path).cuda()
+            
+            # load control mask    
+            control_mask = cv2.imread(control_mask_path)
+            control_mask = cv2.cvtColor(control_mask, cv2.COLOR_BGR2RGB)
+            control_mask = cv2.resize(control_mask, (1024,1024))
+            mask_show = control_mask.copy()
+            control_mask = torch.from_numpy(control_mask).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda() / 255.0
+            
+            # show 
+            controller = EmptyControl()
+            image_control, x_t = run_and_display_control(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, control_mask=control_mask, control_scale=args.control_scale, uncond_embeddings=uncond_embeddings, verbose=False)
+            ptp_utils.view_images([img,inv_img,grad_img, image_control[0],mask_show], prefix=f'{save_path}/pair/sa_{i}', shuffix='.jpg')
+            ptp_utils.view_images([image_control[0]], prefix=f'{save_path}/adv/sa_{i}', shuffix='.png')
+        except:
+            print(i,"Error")
