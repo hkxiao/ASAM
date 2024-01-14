@@ -10,8 +10,8 @@ start_program() {
     --grad_dir=output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-160-ADV-0.4-4-0.1-0.5-100.0-100.0-1.0-2/ \
     --control_mask_dir=sam-1b/sa_000000 \
     --controlnet_path=ControlNet-main/train_output_sdxl/checkpoint-15000/controlnet \
-    --ddim_steps=1 \
-    --control_scale=0.0 \
+    --ddim_steps=50 \
+    --control_scale=1.0 \
     --start=$3 \
     --end=$4
 }

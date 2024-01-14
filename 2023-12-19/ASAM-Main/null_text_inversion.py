@@ -47,9 +47,7 @@ parser.add_argument('--guidance_scale', default=7.5, type=float, help='random se
 # path setting
 parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   
-parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')    
 parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
-parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')
 args = parser.parse_args()
 print(args)
 
@@ -759,7 +757,6 @@ if __name__ == '__main__':
         
         # prepare img & control mask path
         img_path = os.path.join(args.data_root, 'sa_'+ str(i) + '.jpg')
-        control_mask_path = os.path.join(args.control_mask_dir, 'sa_'+ str(i) + '.png')
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
