@@ -45,6 +45,7 @@ parser.add_argument('--guess_mode', action='store_true')
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed')   
 
 # path setting
+parser.add_argument('--SD', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   
 parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
@@ -718,7 +719,7 @@ if __name__ == '__main__':
     GUIDANCE_SCALE = args.guidance_scale
     MAX_NUM_WORDS = 77
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')    
-    ldm_stable = StableDiffusionXLPipeline.from_pretrained("ckpt/stable-diffusion-xl-base-1.0", use_auth_token=MY_TOKEN, scheduler=scheduler).to(device)
+    ldm_stable = StableDiffusionXLPipeline.from_pretrained(args.SD, use_auth_token=MY_TOKEN, scheduler=scheduler).to(device)
     
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()

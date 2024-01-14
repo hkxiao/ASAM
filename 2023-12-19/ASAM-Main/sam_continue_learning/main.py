@@ -546,9 +546,9 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     # merge sam and tune_decoder
     if misc.is_main_process():        
         sam_checkpoint_map = {
-        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
         }
         sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
 
@@ -741,9 +741,9 @@ if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
     dataset_sa000000_control = {"name": "sam_subset",
-                "im_dir": "../sam-1b/sa_000000",
+                "im_dir": "../output/sa_000000-Control/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-160-ADV-0.4-4-0.1-0.5-100.0-100.0-1.0-2-Control-1.0/adv",
                 "gt_dir": "../sam-1b/sa_000000",
-                "im_ext": ".jpg",
+                "im_ext": ".png",
                 "gt_ext": ""}
     
     
