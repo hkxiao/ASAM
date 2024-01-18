@@ -921,8 +921,8 @@ if __name__ == '__main__':
                 print(img_path, "does not exist!")
                 continue
             
-            if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
-                print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
+            if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.jpg')) and not args.debug:
+                print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.jpg'), " has existed!")
                 continue
             
             # load raw img for mse [1,3,1024,1024] [0,1]
