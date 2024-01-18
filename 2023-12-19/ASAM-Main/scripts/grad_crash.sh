@@ -6,8 +6,9 @@ start_program() {
     --save_root=output/sa_000000-Grad \
     --data_root=sam-1b/sa_000000 \
     --caption_path=sam-1b/sa_000000-blip2-caption.json \
-    --inversion_dir=output/Inversion/SD-7.5-50-INV-5/embeddings \
+    --inversion_dir=output/Inversion-SSD/SD-7.5-50-INV-5/embeddings \
     --control_mask_dir=sam-1b/sa_000000 \
+    --SD=ckpt/SSD-1B \
     --sam_batch=160 \
     --eps=0.4 \
     --steps=4 \
@@ -16,8 +17,8 @@ start_program() {
     --mu=0.5 \
     --beta=1.0 \
     --norm=2 \
-    --gamma=100 \
-    --kappa=100 \
+    --gamma=1.0 \
+    --kappa=1.0 \
     --start=$4 \
     --end=$5
 }
@@ -25,8 +26,8 @@ start_program() {
 # 设置GPU列表
 CUDA_VISIBLE_DEVICES_LIST=(0 2 4 6)
 CUDA_VISIBLE_DEVICES_LIST2=(1 3 5 7)
-start=(1 500 1000 1500)
-end=(500 1000 1500 2000)
+start=(4000 5000 6000 7000)
+end=(5000 6000 7000 8000)
 
 PID_LIST=()
 STATUS=()

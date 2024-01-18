@@ -911,6 +911,8 @@ if __name__ == '__main__':
     # Adversarial grad loop
     for i in trange(args.start, args.end+1):
         try:
+            start_per = time.time()
+            
             # prepare img & mask path
             img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
             control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
@@ -979,12 +981,12 @@ if __name__ == '__main__':
             mask_show = control_mask.copy()
             
             # adversarial grad
-            start = time.time()            
+            start_grad = time.time()            
             image_inv, image_grad, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings,raw_img=raw_img,boxes=boxes, label_masks_256=label_masks_256)    
-            print('Grad Time:', time.time() - start)
+            print('Grad Time:', time.time() - start_grad)
             
             
-            start = time.time()
+            start_save = time.time()
             # save x_t
             torch.save(x_t, f'{save_path}/embeddings/sa_{i}_latent.pth')
             
@@ -995,7 +997,9 @@ if __name__ == '__main__':
             # record adversarial iou
             with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
                 f.write(str(worst_iou))
-            print('Save Time:', time.time() - start)
+            print('Save Time:', time.time() - start_save)
+            
+            print('Per Time:', time.time() - start_per)
         except:
             print(i,'Error')
         
