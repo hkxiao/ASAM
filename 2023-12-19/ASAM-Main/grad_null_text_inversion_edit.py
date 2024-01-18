@@ -41,6 +41,8 @@ parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
 parser.add_argument('--guess_mode', action='store_true')   
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
 parser.add_argument('--random_latent', action='store_true')
+parser.add_argument('--SD_type', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--SD_path', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 
 # grad setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
@@ -696,20 +698,19 @@ def text2image_ldm_stable_last(
     momentum = 0
     worst_iou = 1.0
     worst_mask = None
-    for k in range(args.steps):
+    for k in range(args.steps+1):
         print('====>>',k)
         latents = adv_latents
         for i, t in tqdm(enumerate(model.scheduler.timesteps[-start_time:])):
             if uncond_embeddings_ is None:
-                #print("sb")
                 context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
             else:
                 context = torch.cat([uncond_embeddings_, text_embeddings])
             #print(model.device, latents.device, mask_control.device, context.device, t.device)
             latents = ptp_utils.diffusion_step(model, controller, latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=True,guess_mode=args.guess_mode)
         
-        image = ptp_utils.latent2image(model.vae, latents)
-        ptp_utils.view_images([image[0]], prefix='demo')
+        if k==0:
+            img_inv = ptp_utils.latent2image(model.vae, latents)
         
         image = None
         with torch.enable_grad():
@@ -736,11 +737,11 @@ def text2image_ldm_stable_last(
             output = output[0]
             print(type(output))
             
-            #print(example['image'].dtype, example['boxes'].dtype)
+            print(example['image'].dtype, example['boxes'].dtype)
             #raise NameError
             ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
 
-            #print(ad_low_res_logits.shape, ad_low_res_logits.dtype, ad_masks[0,0,...].cpu().numpy().shape)
+            print(ad_low_res_logits.shape, ad_low_res_logits.dtype, ad_masks[0,0,...].cpu().numpy().shape)
             print(ad_masks[0,0,...].cpu().numpy().shape)
     #      cv2.imwrite('demo.png',ad_masks[0,0,...].cpu().numpy().astype(np.uint8)*255)
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
@@ -749,6 +750,8 @@ def text2image_ldm_stable_last(
             iou = compute_iou(ad_low_res_logits, label_masks_256).item()
             if iou < worst_iou:                
                 best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(1024,1024), mode='bilinear', align_corners=False)
+             
+            if k == args.steps: break
                     
             image_m = image_m - mean[None,:,None,None]
             image_m = image_m / std[None,:,None,None]
@@ -818,7 +821,7 @@ def text2image_ldm_stable_last(
     width, height = fig.canvas.get_width_height()
     vis = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3))
     
-    return image, best_latent, worst_mask_show, vis, worst_iou
+    return img_inv, image, best_latent, worst_mask_show, vis, worst_iou
 
 def check_controlnet():
     id = 2    
@@ -870,12 +873,14 @@ if __name__ == '__main__':
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     device1 = torch.device('cuda:1') if torch.cuda.is_available() else torch.device('cpu') 
      
-    ldm_stable = StableDiffusionXLPipeline.from_pretrained("ckpt/stable-diffusion-xl-base-1.0", use_auth_token=MY_TOKEN, scheduler=scheduler, torch_dtype=torch.float32).to(device)
-    
+    ldm_stable = StableDiffusionXLPipeline.from_pretrained(args.SD_path, use_auth_token=MY_TOKEN, scheduler=scheduler, torch_dtype=torch.float32).to(device)
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
-        print("Attribute disable_xformers_memory_efficient_attention() is missing")    
+        print("Attribute disable_xformers_memory_efficient_attention() is missing")  
+        
+    # Load Controller
+    controller = AttentionStore()  
     
     # Load imgs and Caption  
     captions = {}
@@ -891,7 +896,7 @@ if __name__ == '__main__':
     if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save path
-    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
+    save_path = args.save_root + '/' + args.prefix + '-' + args.SD_type + '-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
     if args.random_latent:
         save_path += '-random_latent'
     
@@ -905,87 +910,92 @@ if __name__ == '__main__':
     
     # Adversarial grad loop
     for i in trange(args.start, args.end+1):
-        # prepare img & mask path
-        img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
-        control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
-        label_mask_dir = args.data_root+'/'+'sa_'+str(i)
-        if not os.path.exists(img_path):
-            print(img_path, "does not exist!")
-            continue
+        try:
+            # prepare img & mask path
+            img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
+            control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
+            label_mask_dir = args.data_root+'/'+'sa_'+str(i)
+            if not os.path.exists(img_path):
+                print(img_path, "does not exist!")
+                continue
+            
+            if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
+                print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
+                continue
+            
+            # load raw img for mse [1,3,1024,1024] [0,1]
+            pil_image = Image.open(img_path).convert('RGB').resize(image_size)
+            raw_img_show = np.array(pil_image.resize((1024,1024)))
+            raw_img = (torch.tensor(np.array(pil_image).astype(np.float32), device=device1).unsqueeze(0)/255.).permute(0,3, 1, 2)
+            raw_img = raw_img - mean[None,:,None,None]
+            raw_img = raw_img / std[None,:,None,None]
+            
+            # load mask labels 
+            global origin_len
+            origin_len = len(os.listdir(label_mask_dir))
+            label_masks = torch.empty([0,1,1024,1024]).to(device1)
+            for j in range(min(args.sam_batch,origin_len)):
+                label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
+                #print(label_mask_path)
+                label_mask = Image.open(label_mask_path).convert('L').resize((image_size))
+                label_mask_torch = torch.tensor(np.array(label_mask)).to(device1).to(torch.float32)
+                #print(label_mask_torch.max())
+                label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
+            
+            # load sup mask for show
+            sup_masks = torch.empty([0,1,1024,1024]).to(device1)
+            for j in range(min(args.sam_batch,origin_len),origin_len):
+                label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
+                label_mask = Image.open(label_mask_path).convert('L').resize((1024,1024)) 
+                label_mask_torch = torch.tensor(np.array(label_mask)).to(device1).to(torch.float32)
+                sup_masks = torch.cat([sup_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
+            
+            boxes = masks_to_boxes(label_masks.squeeze())            
+            label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
+            
+            # load caption
+            prompt = captions[img_path.split('/')[-1]]
+            print(prompt)
+            
+            # load x_t & uncondition embeddings 
+            latent_path = f"{args.inversion_dir}/sa_{i}_latent.pth"
+            uncond_path = f"{args.inversion_dir}/sa_{i}_uncond.pth"
+            
+            if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
+                print(latent_path, uncond_path, "do not exist!")
+                continue
+            else:
+                x_t = torch.load(latent_path).cuda().to(torch.float32)
+                uncond_embeddings = torch.load(uncond_path).cuda().to(torch.float32)
+            
+            if args.random_latent:
+                x_t = torch.randn_like(x_t)
+                uncond_embeddings = torch.randn_like(uncond_embeddings)
+            
+            # load control mask    
+            control_mask = cv2.imread(control_mask_path)
+            control_mask = cv2.cvtColor(control_mask, cv2.COLOR_BGR2RGB)
+            control_mask = cv2.resize(control_mask, (1024,1024))
+            mask_show = control_mask.copy()
+            
+            # adversarial grad
+            start = time.time()            
+            image_inv, image_grad, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings,raw_img=raw_img,boxes=boxes, label_masks_256=label_masks_256)    
+            print('Grad Time:', time.time() - start)
+            
+            
+            start = time.time()
+            # save x_t
+            torch.save(x_t, f'{save_path}/embeddings/sa_{i}_latent.pth')
+            
+            # show 
+            ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)), shuffix='.jpg')
+            ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], image_grad[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)), shuffix='.jpg')
+            
+            # record adversarial iou
+            with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
+                f.write(str(worst_iou))
+            print('Save Time:', time.time() - start)
+        except:
+            print(i,'Error')
         
-        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
-            print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
-            continue
-        
-        # load raw img for mse [1,3,1024,1024] [0,1]
-        pil_image = Image.open(img_path).convert('RGB').resize(image_size)
-        raw_img_show = np.array(pil_image.resize((1024,1024)))
-        raw_img = (torch.tensor(np.array(pil_image).astype(np.float32), device=device1).unsqueeze(0)/255.).permute(0,3, 1, 2)
-        raw_img = raw_img - mean[None,:,None,None]
-        raw_img = raw_img / std[None,:,None,None]
-        
-        # load mask labels 
-        global origin_len
-        origin_len = len(os.listdir(label_mask_dir))
-        label_masks = torch.empty([0,1,1024,1024]).to(device1)
-        for j in range(min(args.sam_batch,origin_len)):
-            label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
-            #print(label_mask_path)
-            label_mask = Image.open(label_mask_path).convert('L').resize((image_size))
-            label_mask_torch = torch.tensor(np.array(label_mask)).to(device1).to(torch.float32)
-            #print(label_mask_torch.max())
-            label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
-        
-        # load sup mask for show
-        sup_masks = torch.empty([0,1,1024,1024]).to(device1)
-        for j in range(min(args.sam_batch,origin_len),origin_len):
-            label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
-            label_mask = Image.open(label_mask_path).convert('L').resize((1024,1024)) 
-            label_mask_torch = torch.tensor(np.array(label_mask)).to(device1).to(torch.float32)
-            sup_masks = torch.cat([sup_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
-        
-        boxes = masks_to_boxes(label_masks.squeeze())            
-        label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
-        
-        # load caption
-        prompt = captions[img_path.split('/')[-1]]
-        print(prompt)
-        
-        # load x_t & uncondition embeddings 
-        latent_path = f"{args.inversion_dir}/sa_{i}_latent.pth"
-        uncond_path = f"{args.inversion_dir}/sa_{i}_uncond.pth"
-        
-        if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
-            print(latent_path, uncond_path, "do not exist!")
-            continue
-        else:
-            x_t = torch.load(latent_path).cuda().to(torch.float32)
-            uncond_embeddings = torch.load(uncond_path).cuda().to(torch.float32)
-        
-        if args.random_latent:
-            x_t = torch.randn_like(x_t)
-            uncond_embeddings = torch.randn_like(uncond_embeddings)
-        
-        # load control mask    
-        control_mask = cv2.imread(control_mask_path)
-        control_mask = cv2.cvtColor(control_mask, cv2.COLOR_BGR2RGB)
-        control_mask = cv2.resize(control_mask, (1024,1024))
-        mask_show = control_mask.copy()
-        
-        # adversarial grad
-        controller = AttentionStore()
-        start = time.time()            
-        image_inv, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings,raw_img=raw_img,boxes=boxes, label_masks_256=label_masks_256)    
-        print('Grad Time:', time.time() - start)
-        
-        # save x_t
-        torch.save(x_t, f'{save_path}/embeddings/sa_{i}_latent.pth')
-        
-        # show 
-        ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
-        print(raw_img_show.shape, mask_show.shape, image_inv[0].shape, worst_mask.shape, vis.shape, str2img(worst_iou).shape)
-        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)), shuffix='.jpg')
-        
-        # record adversarial iou
-        with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
-            f.write(str(worst_iou))
