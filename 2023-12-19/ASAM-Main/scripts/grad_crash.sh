@@ -24,12 +24,10 @@ start_program() {
 }
 
 # 设置GPU列表
-CUDA_VISIBLE_DEVICES_LIST=(0 2 4 6)
-CUDA_VISIBLE_DEVICES_LIST2=(1 3 5 7)
-# CUDA_VISIBLE_DEVICES_LIST=(0)
-# CUDA_VISIBLE_DEVICES_LIST2=(1)
-start=(4000 5000 6000 7000)
-end=(5000 6000 7000 8000)
+CUDA_VISIBLE_DEVICES_LIST=(4 6)
+CUDA_VISIBLE_DEVICES_LIST2=(5 7)
+start=(1 2000)
+end=(2000 4000)
 
 PID_LIST=()
 STATUS=()
@@ -81,6 +79,5 @@ do
     if [ $finish == true ]; then
         break
     fi
-
     sleep 30
 done
