@@ -6,28 +6,29 @@ start_program() {
     --save_root=output/sa_000000-Grad \
     --data_root=sam-1b/sa_000000 \
     --caption_path=sam-1b/sa_000000-blip2-caption.json \
-    --inversion_dir=output/Inversion-SSD/SD-7.5-50-INV-5/embeddings \
+    --inversion_dir=output/Inversion/SSD-7.5-50-INV-5/embeddings \
     --control_mask_dir=sam-1b/sa_000000 \
-    --SD=ckpt/SSD-1B \
-    --sam_batch=160 \
-    --eps=0.4 \
-    --steps=4 \
+    --SD_path=ckpt/SSD-1B \
+    --SD_type=SSD \
     --ddim_steps=50 \
+    --sam_batch=160 \
+    --eps=0.2 \
+    --steps=2 \
     --alpha=0.1 \
     --mu=0.5 \
     --beta=1.0 \
     --norm=2 \
-    --gamma=1.0 \
-    --kappa=1.0 \
+    --gamma=32.0 \
+    --kappa=32.0 \
     --start=$4 \
     --end=$5
 }
 
 # 设置GPU列表
-CUDA_VISIBLE_DEVICES_LIST=(0 2 4 6)
-CUDA_VISIBLE_DEVICES_LIST2=(1 3 5 7)
-start=(4000 5000 6000 7000)
-end=(5000 6000 7000 8000)
+CUDA_VISIBLE_DEVICES_LIST=(4 6)
+CUDA_VISIBLE_DEVICES_LIST2=(5 7)
+start=(1 2000)
+end=(2000 4000)
 
 PID_LIST=()
 STATUS=()
@@ -63,7 +64,6 @@ do
             # 获取进程的退出状态
         
             start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} utils/grad_crash_aid.py ${start[i]} ${end[i]}
-
             STATUS[i]=$?
             echo "进程 $process_id 的退出状态为 ${STATUS[i]}"
 
@@ -78,5 +78,5 @@ do
     if [ $finish == true ]; then
         break
     fi
-    sleep 5
+    sleep 30
 done
