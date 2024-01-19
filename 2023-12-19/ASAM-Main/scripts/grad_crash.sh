@@ -1,4 +1,5 @@
 #!/bin/bash
+
 start_program() {
     export CUDA_VISIBLE_DEVICES=$1,$2
     python $3 \
@@ -25,21 +26,20 @@ start_program() {
 
 # 设置GPU列表
 CUDA_VISIBLE_DEVICES_LIST=(0 2 4 6)
-CUDA_VISIBLE_DEVICES_LIST2=(1 3 5 7)
+CUDA_VISIBLE_DEVICES_LIST_2=(1 3 5 7)
 start=(4000 5000 6000 7000)
 end=(5000 6000 7000 8000)
 
 PID_LIST=()
 STATUS=()
-Keyborad=false
 
 # run
 for i in $(seq 0 $((${#CUDA_VISIBLE_DEVICES_LIST[@]}-1)))
 do
     echo "Start: ${start[i]}"
     echo "End ${end[i]}"
-    echo "GPU ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]}"
-    start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
+    echo "GPU ${CUDA_VISIBLE_DEVICES_LIST[i]}"
+    start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
     PID_LIST+=($!)
     STATUS+=(-1)
 done
@@ -62,22 +62,19 @@ do
             echo "进程 $process_id 未在执行"
             
             # 获取进程的退出状态
-        
-            start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} utils/grad_crash_aid.py ${start[i]} ${end[i]}
+            start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} utils/grad_crash_aid.py ${start[i]} ${end[i]} 
+
             STATUS[i]=$?
             echo "进程 $process_id 的退出状态为 ${STATUS[i]}"
 
             if [ ${STATUS[i]} -ne 0 ]; then
-                start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
-                PID=$!
-                PID_LIST[i]=$PID
+                start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
+                PID_LIST[i]=$!
                 echo "进程 ${PID_LIST[i]} 重新执行"
                 finish=false
             fi
         fi
     done
-    echo "finish state =====>>"
-    echo $finish
     if [ $finish == true ]; then
         break
     fi

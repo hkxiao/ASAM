@@ -13,10 +13,9 @@ parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
 parser.add_argument('--guess_mode', action='store_true')   
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
-<<<<<<< HEAD
-=======
 parser.add_argument('--random_latent', action='store_true')
->>>>>>> e2255d478443aaa0c3130e5940861215d9b642c2
+parser.add_argument('--SD_type', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--SD_path', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 
 # grad setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
@@ -51,16 +50,17 @@ print("Check Status")
 
 if __name__ == '__main__':
     # Prepare save path
-    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
-<<<<<<< HEAD
-
-=======
+    save_path = args.save_root + '/' + args.prefix + '-' + args.SD_type + '-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
     if args.random_latent:
         save_path += '-random_latent'
->>>>>>> e2255d478443aaa0c3130e5940861215d9b642c2
+    
+    print("Save Path:", save_path)
     # Adversarial grad loop
     for i in range(args.start, args.end+1):
+        # print(os.path.exists(os.path.join(args.inversion_dir,'sa_'+str(i)+'_latent.pth')) and \
+        # not os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.jpg')))
         if os.path.exists(os.path.join(args.inversion_dir,'sa_'+str(i)+'_latent.pth')) and \
-        not os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')):
+        not os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.jpg')):
+            print("ssssbbbbbb")
             sys.exit(-1)
     sys.exit(0)
