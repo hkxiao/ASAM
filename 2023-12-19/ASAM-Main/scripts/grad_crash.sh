@@ -24,10 +24,10 @@ start_program() {
 }
 
 # 设置GPU列表
-CUDA_VISIBLE_DEVICES_LIST=(4 6)
-CUDA_VISIBLE_DEVICES_LIST2=(5 7)
-start=(1 2000)
-end=(2000 4000)
+CUDA_VISIBLE_DEVICES_LIST=(0 2 4 6)
+CUDA_VISIBLE_DEVICES_LIST2=(1 3 5 7)
+start=(4000 5000 6000 7000)
+end=(5000 6000 7000 8000)
 
 PID_LIST=()
 STATUS=()
@@ -45,7 +45,7 @@ do
 done
 
 # check crash
-while [ "$Keyboard" != "true" ];
+while true
 do
     finish=true
     for i in $(seq 0 $((${#CUDA_VISIBLE_DEVICES_LIST[@]}-1)))
@@ -70,14 +70,16 @@ do
             if [ ${STATUS[i]} -ne 0 ]; then
                 start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
                 PID=$!
-                PID_LIST[i]=($PID)
+                PID_LIST[i]=$PID
                 echo "进程 ${PID_LIST[i]} 重新执行"
                 finish=false
             fi
         fi
     done
+    echo "finish state =====>>"
+    echo $finish
     if [ $finish == true ]; then
         break
     fi
-    sleep 30
+    sleep 5
 done
