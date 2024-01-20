@@ -38,8 +38,8 @@ for i in $(seq 0 $((${#CUDA_VISIBLE_DEVICES_LIST[@]}-1)))
 do
     echo "Start: ${start[i]}"
     echo "End ${end[i]}"
-    echo "GPU ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]}"
-    start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
+    echo "GPU ${CUDA_VISIBLE_DEVICES_LIST[i]}"
+    start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
     PID_LIST+=($!)
     STATUS+=(-1)
 done
@@ -62,15 +62,20 @@ do
             echo "进程 $process_id 未在执行"
             
             # 获取进程的退出状态
-        
-            start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} utils/grad_crash_aid.py ${start[i]} ${end[i]}
+            start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} utils/grad_crash_aid.py ${start[i]} ${end[i]} 
+
             STATUS[i]=$?
             echo "进程 $process_id 的退出状态为 ${STATUS[i]}"
 
             if [ ${STATUS[i]} -ne 0 ]; then
+<<<<<<< HEAD
                 start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
                 PID=$!
                 PID_LIST[i]=($PID)
+=======
+                start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
+                PID_LIST[i]=$!
+>>>>>>> origin/master
                 echo "进程 ${PID_LIST[i]} 重新执行"
                 finish=false
             fi
@@ -79,5 +84,5 @@ do
     if [ $finish == true ]; then
         break
     fi
-    sleep 30
+    sleep 5
 done
