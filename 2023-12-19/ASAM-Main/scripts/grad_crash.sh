@@ -25,7 +25,7 @@ start_program() {
 
 # 设置GPU列表
 CUDA_VISIBLE_DEVICES_LIST=(0 2 4 6)
-CUDA_VISIBLE_DEVICES_LIST2=(1 3 5 7)
+CUDA_VISIBLE_DEVICES_LIST_2=(1 3 5 7)
 start=(9191 9400 9700 10000)
 end=(9400 9700 10000 11187)
 
@@ -63,19 +63,12 @@ do
             
             # 获取进程的退出状态
             start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} utils/grad_crash_aid.py ${start[i]} ${end[i]} 
-
             STATUS[i]=$?
             echo "进程 $process_id 的退出状态为 ${STATUS[i]}"
 
             if [ ${STATUS[i]} -ne 0 ]; then
-<<<<<<< HEAD
-                start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
-                PID=$!
-                PID_LIST[i]=($PID)
-=======
                 start_program ${CUDA_VISIBLE_DEVICES_LIST[i]} ${CUDA_VISIBLE_DEVICES_LIST_2[i]} grad_null_text_inversion_edit.py ${start[i]} ${end[i]} &
                 PID_LIST[i]=$!
->>>>>>> origin/master
                 echo "进程 ${PID_LIST[i]} 重新执行"
                 finish=false
             fi
