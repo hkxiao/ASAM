@@ -50,17 +50,11 @@ print("Check Status")
 
 if __name__ == '__main__':
     # Prepare save path
-<<<<<<< HEAD
-    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
-    if args.random_latent:
-        save_path += '-random_latent'
-=======
     save_path = args.save_root + '/' + args.prefix + '-' + args.SD_type + '-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
     if args.random_latent:
         save_path += '-random_latent'
     
     print("Save Path:", save_path)
->>>>>>> origin/master
     # Adversarial grad loop
     for i in range(args.start, args.end+1):
         # print(os.path.exists(os.path.join(args.inversion_dir,'sa_'+str(i)+'_latent.pth')) and \
