@@ -36,6 +36,7 @@ parser.add_argument('--guess_mode', action='store_true')
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
 parser.add_argument('--random_latent', action='store_true')
 parser.add_argument('--control_scale', type=float, default=1.0)
+parser.add_argument('--SD_path', type=str, default=1.0)
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
@@ -620,7 +621,7 @@ if __name__ == '__main__':
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
     controlnet = ControlNetModel.from_pretrained(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionXLControlNetPipeline.from_pretrained("ckpt/stable-diffusion-xl-base-1.0", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    ldm_stable = StableDiffusionXLControlNetPipeline.from_pretrained(args.SD_path, use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
@@ -654,8 +655,8 @@ if __name__ == '__main__':
         try:
             # prepare img & mask path
             img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
-            inv_img_path = args.inversion_dir+'/inv/'+'sa_'+str(i)+'.png'
-            grad_img_path = args.grad_dir+'/adv/'+'sa_'+str(i)+'.png'
+            inv_img_path = args.inversion_dir+'/inv/'+'sa_'+str(i)+'.jpg'
+            grad_img_path = args.grad_dir+'/adv/'+'sa_'+str(i)+'.jpg'
             control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
 
             print(grad_img_path,inv_img_path)
@@ -697,7 +698,10 @@ if __name__ == '__main__':
                 x_t = torch.load(latent_path).cuda()
                 uncond_embeddings = torch.load(uncond_path).cuda()
             
-            # load control mask    
+            if args.random_latent:
+                x_t = torch.randn_like(x_t)
+                uncond_embeddings = torch.randn_like(uncond_embeddings)
+
             control_mask = cv2.imread(control_mask_path)
             control_mask = cv2.cvtColor(control_mask, cv2.COLOR_BGR2RGB)
             control_mask = cv2.resize(control_mask, (1024,1024))
@@ -708,6 +712,6 @@ if __name__ == '__main__':
             controller = EmptyControl()
             image_control, x_t = run_and_display_control(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, control_mask=control_mask, control_scale=args.control_scale, uncond_embeddings=uncond_embeddings, verbose=False)
             ptp_utils.view_images([img,inv_img,grad_img, image_control[0],mask_show], prefix=f'{save_path}/pair/sa_{i}', shuffix='.jpg')
-            ptp_utils.view_images([image_control[0]], prefix=f'{save_path}/adv/sa_{i}', shuffix='.png')
+            ptp_utils.view_images([image_control[0]], prefix=f'{save_path}/adv/sa_{i}', shuffix='.jpg')
         except:
             print(i,"Error")

@@ -6,20 +6,22 @@ start_program() {
     --save_root=output/sa_000000-Control \
     --data_root=sam-1b/sa_000000 \
     --caption_path=sam-1b/sa_000000-blip2-caption.json \
-    --inversion_dir=output/Inversion/SD-7.5-50-INV-5/ \
-    --grad_dir=output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-160-ADV-0.4-4-0.1-0.5-100.0-100.0-1.0-2/ \
+    --inversion_dir=output/Inversion/SSD-7.5-50-INV-5/ \
+    --grad_dir=output/sa_000000-Grad/skip-ablation-01-mi-SSD-7.5-50-SAM-sam-vit_b-160-ADV-0.2-2-0.1-0.5-32.0-32.0-1.0-2/ \
     --control_mask_dir=sam-1b/sa_000000 \
-    --controlnet_path=ControlNet-main/train_output_sdxl/checkpoint-15000/controlnet \
+    --controlnet_path=ControlNet-main/train_output_ssd/checkpoint-10500/controlnet \
+    --SD_path=ckpt/SSD-1B \
     --ddim_steps=50 \
     --control_scale=1.0 \
     --start=$3 \
-    --end=$4
+    --end=$4 \
+    --random_latent
 }
 
 # 设置GPU列表
-CUDA_VISIBLE_DEVICES_LIST=(2 3 4 5 6 7)
-start=(4000 4500 5000 5500 6000 6500 7000 7500)
-end=(4500 5000 5500 6000 6500 7000 7500 8000)
+CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
+start=(0 500 1000 1500 2000 2500 3000 3500)
+end=(500 1000 1500 2000 2500 3000 3500 4000)
 
 PID_LIST=()
 STATUS=()
