@@ -787,4 +787,4 @@ if __name__ == '__main__':
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t ,uncond_embeddings=uncond_embeddings, verbose=False)
         ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}', shuffix='.jpg')
-        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/sa_{i}', shuffix='.png')
+        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/sa_{i}', shuffix='.jpg')

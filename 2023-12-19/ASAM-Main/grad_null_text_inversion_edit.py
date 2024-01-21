@@ -991,7 +991,7 @@ if __name__ == '__main__':
             torch.save(x_t, f'{save_path}/embeddings/sa_{i}_latent.pth')
             
             # show 
-            ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)), shuffix='.jpg')
+            ptp_utils.view_images([image_grad[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)), shuffix='.jpg')
             ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], image_grad[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)), shuffix='.jpg')
             
             # record adversarial iou
