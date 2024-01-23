@@ -585,12 +585,25 @@ def get_noise_pred_control(model, control_mask,control_scale,latents, t, context
             added_cond_kwargs=added_cond_kwargs,
             return_dict=False,
     )
-        
+    
+    mid_block_res_sample = mid_block_res_sample + mid_block_res_sample_boundary
+    # for down_block_res_sample in down_block_res_samples:
+    #     print(down_block_res_sample.shape)
+    down_block_res_samples = [down_block_res_sample + down_block_res_sample_boundary for down_block_res_sample, down_block_res_sample_boundary in zip(down_block_res_samples,down_block_res_samples_boundary)]
+    
+    # print("ssss")
+    # for down_block_res_sample in down_block_res_samples:
+    #     print(down_block_res_sample.shape)
+    
+    # raise NameError
+    
+    # print(torch.max(down_block_res_samples[0]), torch.max(mid_block_res_sample))
+    # print(torch.max(down_block_res_samples_boundary[0]), torch.max(mid_block_res_sample_boundary))
+    # raise NameError    
 
-    noise_pred = model.unet(
-        latents, t, encoder_hidden_states=context,added_cond_kwargs=added_cond_kwargs,\
-            down_block_additional_residuals=down_block_res_samples+down_block_res_samples_boundary \
-                ,mid_block_additional_residual=mid_block_res_sample+mid_block_res_sample_boundary)["sample"]
+    noise_pred = model.unet(latents, t, encoder_hidden_states=context,added_cond_kwargs=added_cond_kwargs, \
+        down_block_additional_residuals=down_block_res_samples,mid_block_additional_residual=mid_block_res_sample)["sample"]
+    
     return noise_pred
 
 def diffusion_step_control(model, controller, control_mask, control_scale,latents, context, t, guidance_scale, pooled_context, add_time_ids,low_resource=False, guess_mode=False):
@@ -605,6 +618,7 @@ def diffusion_step_control(model, controller, control_mask, control_scale,latent
         
         print(control_mask.shape,pooled_context.shape)
         noise_pred = get_noise_pred_control(model,control_mask, control_scale ,latents_input, t, context, pooled_context, add_time_ids)
+        print(noise_pred.shape)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         
     noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
@@ -679,9 +693,9 @@ if __name__ == '__main__':
             print(img_path, "does not exist!")
             continue
         
-        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
-            print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
-            continue
+        # if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
+        #     print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
+        #     continue
         
         # load image
         img = cv2.imread(img_path)

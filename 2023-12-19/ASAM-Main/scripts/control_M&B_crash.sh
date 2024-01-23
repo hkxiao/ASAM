@@ -13,20 +13,16 @@ start_program() {
     --boundary_controlnet_path=ControlNet-main/train_output_ssd_canny/checkpoint-30000/controlnet\
     --SD_path=ckpt/SSD-1B \
     --ddim_steps=50 \
-    --mask_control_scale=0.0 \
+    --mask_control_scale=1.0 \
     --boundary_control_scale=1.0 \
     --start=$3 \
-    --end=$4 \
-    --random_latent
+    --end=$4 
 }
 
 # 设置GPU列表
 CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
-CUDA_VISIBLE_DEVICES_LIST=(0)
-start=(1)
-end=(1)
-
-
+start=(4000 4500 5000 5500 6000 6500 7000 7500)
+end=(4500 5000 5500 6000 6500 7000 7500 8000)
 
 
 PID_LIST=()
