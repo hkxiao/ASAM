@@ -18,7 +18,6 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import cv2
 import json    
-from sam_continue_learning.segment_anything.MyPredictor import SamPredictor
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from show import show_box, show_mask 
@@ -102,8 +101,8 @@ if device == 'cuda':
 net.eval()
 net.cuda()
 
-if args.model == 'sam':
-    net_predictor = SamPredictor(net)
+# if args.model == 'sam':
+#     net_predictor = SamPredictor(net)
 
 def str2img(value):
     width, height = 512, 512
@@ -660,7 +659,12 @@ def text2image_ldm_stable_last(
             example['image'] = image_m[0]*255.0
             example['boxes'] = boxes
             example['original_size'] = image_size
-            output = net([example], multimask_output=False)[0]
+            output, interbeddings = net([example], multimask_output=False)
+            output = output[0]
+            print(type(output))
+            
+            print(example['image'].dtype, example['boxes'].dtype)
+            #raise NameError
             ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
                       
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
@@ -789,7 +793,7 @@ if __name__ == '__main__':
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("../../2023-12-19/ASAM-Main/ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     # ldm_stable.enable_model_cpu_offload()
     
     try:
