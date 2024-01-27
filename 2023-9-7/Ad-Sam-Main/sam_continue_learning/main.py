@@ -96,7 +96,7 @@ class MaskDecoder_Tuning(MaskDecoder):
         """
         assert model_type in ["vit_b","vit_l","vit_h"]
         
-        checkpoint_dict = {"vit_b":"pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
+        checkpoint_dict = {"vit_b": os.path.join(args.load_prefix,"pretrained_checkpoint/sam_vit_b_maskdecoder.pth"),
                            "vit_l":"pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
                            'vit_h':"pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
         checkpoint_path = checkpoint_dict[model_type]
@@ -208,7 +208,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
     if len(masks) == 0:
         return
 
-    print(masks.shape, len(ious), len(boundary_ious))
+    #print(masks.shape, len(ious), len(boundary_ious))
     for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
        
         plt.figure(figsize=(10,10))
@@ -275,6 +275,7 @@ def get_args_parser():
                         help="The path to the hq_decoder training checkpoint for evaluation")
     parser.add_argument('--train-datasets', nargs='+')
     parser.add_argument('--valid-datasets', nargs='+')
+    parser.add_argument('--load_prefix', default='')
     
     # SAM setting
     parser.add_argument("--model-type", type=str, default="vit_l", 
@@ -388,6 +389,7 @@ def main(train_datasets, valid_datasets, args):
             net_without_ddp.load_state_dict(torch.load(args.restore_model))
         else:
             net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
+
     parameters_grad, parameters_no_grad = 0, 0
     for n,p in net_without_ddp.named_parameters():
         if p.requires_grad: parameters_grad += 1
@@ -397,7 +399,7 @@ def main(train_datasets, valid_datasets, args):
     
     
     sam_checkpoint_map = {
-        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_b': os.path.join(args.load_prefix,'pretrained_checkpoint/sam_vit_b_01ec64.pth'),
         'vit_l': 'pretrained_checkpoint/sam_vit_l_0b3195.pth',
         'vit_h': 'pretrained_checkpoint/sam_vit_h_4b8939.pth',
     }
@@ -610,7 +612,9 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
-            
+            # labels_val_np = labels_val[0,0,...].cpu().data.numpy()
+            # cv2.imwrite("tmp.png",labels_val_np*255.0)
+            # raise NameError
             if n == 0:
                 bad_examples += 1
                 loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
@@ -646,7 +650,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 dict_input['boxes'] = labels_box #N 4
             elif args.prompt_type == 'point': 
                 point_coords = labels_points #[N 10 2]
-                print(point_coords.shape)
+                #print(point_coords.shape)
                 dict_input['point_coords'] = point_coords
                 dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
             elif args.prompt_type == 'noise_mask':
@@ -677,7 +681,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     multimask_output=False,
                 )
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-            print(masks.shape,labels_ori.shape)
+            #print(masks.shape,labels_ori.shape)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -873,10 +877,40 @@ if __name__ == "__main__":
             "gt_ext": ".png"
         }
     
+    
+    dataset_pascal_part58 = {"name": "Pascal_Part58",
+            "im_dir": "data/Pascal-Part-201/Img_val",
+            "gt_dir": "data/Pascal-Part-201/parts58",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+    }
+    
+    dataset_pascal_part201 = {"name": "Pascal_Part201",
+            "im_dir": "data/Pascal-Part-201/Img_val",
+            "gt_dir": "data/Pascal-Part-201/parts201",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+    }
+    
+    dataset_pascal_part108 = {"name": "Pascal_Part108",
+            "im_dir": "data/Pascal-Part-201/Img_val",
+            "gt_dir": "data/Pascal-Part-201/parts108",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+    }
+    
     dataset_streets = {"name": "streets_coco",
         "im_dir": "data/vehicleannotations/images",
         "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
         "im_ext": ".jpg",
+    }
+    
+        
+    dataset_ImagenetPart = {"name": "ImagenetPart",
+        "im_dir": "data/PartImageNet/images/test",
+        "gt_dir": "data/PartImageNet/annotations/test",
+        "im_ext": ".JPEG",
+        "gt_ext": ".png"
     }
     
     dataset_TimberSeg = {"name": "timberseg_coco",
@@ -892,6 +926,7 @@ if __name__ == "__main__":
         "gt_ext": "_label.png"
         }
     
+    
     dataset_gtea_train = {"name": "gtea",
         "im_dir": "data/GTEA_GAZE_PLUS/Images",
         "gt_dir": "data/GTEA_GAZE_PLUS/Masks",
@@ -902,6 +937,12 @@ if __name__ == "__main__":
     dataset_streets = {"name": "streets_coco",
         "im_dir": "data/vehicleannotations/images",
         "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_paco_lvis = {"name": "PACO_LVIS_coco",
+        "im_dir": "data/PACO/",
+        "annotation_file": "data/PACO/paco_lvis_v1_val.json",
         "im_ext": ".jpg",
     }
     
@@ -919,6 +960,7 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
         "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
         "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
         "im_ext": ".jpg",
@@ -997,5 +1039,15 @@ if __name__ == "__main__":
         
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
     valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]
+    
+    for train_dataset in train_datasets:
+        train_dataset['im_dir'] = os.path.join(args.load_prefix, train_dataset['im_dir'])
+        if 'gt_dir' in train_dataset: train_dataset['gt_dir'] = os.path.join(args.load_prefix, train_dataset['gt_dir'])
+        if 'annotation_file' in train_dataset: train_dataset['annotation_file'] = os.path.join(args.load_prefix, train_dataset['annotation_file'])
+        
+    for test_dataset in valid_datasets:
+        test_dataset['im_dir'] = os.path.join(args.load_prefix, test_dataset['im_dir'])
+        if 'gt_dir' in test_dataset: test_dataset['gt_dir'] = os.path.join(args.load_prefix, test_dataset['gt_dir'])
+        if 'annotation_file' in test_dataset: test_dataset['annotation_file'] = os.path.join(args.load_prefix, test_dataset['annotation_file'])
     
     main(train_datasets, valid_datasets, args)
