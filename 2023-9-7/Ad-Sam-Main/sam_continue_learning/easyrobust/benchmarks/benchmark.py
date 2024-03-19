@@ -81,6 +81,7 @@ def main():
     if args.ckpt_path.startswith('http'):
         ckpt = model_zoo.load_url(args.ckpt_path)
     else:
+        print(args.ckpt_path)
         ckpt = torch.load(args.ckpt_path)
 
     if args.use_ema:
