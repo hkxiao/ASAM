@@ -612,8 +612,11 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
+<<<<<<< HEAD
             #print(inputs_val.shape, labels_val.shape, torch.max(labels_ori))
             
+=======
+>>>>>>> 34052b4524d8526b61edbd2c828b16e17c2a2bf4
             # labels_val_np = labels_val[0,0,...].cpu().data.numpy()
             # cv2.imwrite("tmp.png",labels_val_np*255.0)
             # raise NameError
@@ -892,10 +895,40 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
+    
+    dataset_pascal_part58 = {"name": "Pascal_Part58",
+            "im_dir": "data/Pascal-Part-201/Img_val",
+            "gt_dir": "data/Pascal-Part-201/parts58",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+    }
+    
+    dataset_pascal_part201 = {"name": "Pascal_Part201",
+            "im_dir": "data/Pascal-Part-201/Img_val",
+            "gt_dir": "data/Pascal-Part-201/parts201",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+    }
+    
+    dataset_pascal_part108 = {"name": "Pascal_Part108",
+            "im_dir": "data/Pascal-Part-201/Img_val",
+            "gt_dir": "data/Pascal-Part-201/parts108",
+            "im_ext": ".jpg",
+            "gt_ext": ".png"
+    }
+    
     dataset_streets = {"name": "streets_coco",
         "im_dir": "data/vehicleannotations/images",
         "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
         "im_ext": ".jpg",
+    }
+    
+        
+    dataset_ImagenetPart = {"name": "ImagenetPart",
+        "im_dir": "data/PartImageNet/images/test",
+        "gt_dir": "data/PartImageNet/annotations/test",
+        "im_ext": ".JPEG",
+        "gt_ext": ".png"
     }
     
     dataset_TimberSeg = {"name": "timberseg_coco",
@@ -911,6 +944,7 @@ if __name__ == "__main__":
         "gt_ext": "_label.png"
     }
     
+    
     dataset_gtea_train = {"name": "gtea",
         "im_dir": "data/GTEA_GAZE_PLUS/Images",
         "gt_dir": "data/GTEA_GAZE_PLUS/Masks",
@@ -921,6 +955,12 @@ if __name__ == "__main__":
     dataset_streets = {"name": "streets_coco",
         "im_dir": "data/vehicleannotations/images",
         "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_paco_lvis = {"name": "PACO_LVIS_coco",
+        "im_dir": "data/PACO/",
+        "annotation_file": "data/PACO/paco_lvis_v1_val.json",
         "im_ext": ".jpg",
     }
     
@@ -938,6 +978,7 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
         "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
         "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
         "im_ext": ".jpg",
