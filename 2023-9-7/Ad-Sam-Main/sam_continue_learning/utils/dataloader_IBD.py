@@ -21,7 +21,7 @@ import json
 from pycocotools import mask
 
 
-class Ade20kDataset(Dataset):
+class IBDDataset(Dataset):
     def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False,batch_size_prompt=-1):
 
         self.transform = transform
@@ -66,43 +66,47 @@ class Ade20kDataset(Dataset):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
         
+        # print(im_path, gt_path)
+        # raise NameError
         im = io.imread(im_path)
         naive_gt = io.imread(gt_path)        
         
-        if len(naive_gt.shape) < 3:
-            naive_gt = naive_gt[:, :, np.newaxis]
-        if naive_gt.shape[2] == 1:
-            naive_gt = np.repeat(naive_gt, 3, axis=2)
+        # print(naive_gt.shape)
+        # print(np.max(naive_gt))
+        # raise NameError
         
-        naive_gt = naive_gt[...,0] + naive_gt[...,1]*(1<<8) + naive_gt[...,2]*(1<<16)
-        unique_list = sorted(np.unique(naive_gt))
-        
+        unique_list = sorted(np.unique(naive_gt))        
         gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
+        
+        print(len(unique_list))
+        
         for i in unique_list:
-            if i == 0: continue
+            if i==0: continue
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
             tmp_gt[naive_gt==i]=255
             gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
-
+            
+            # import cv2
+            # cv2.imwrite(f"{str(i)}.png",tmp_gt)
+        # print(gt.shape)
+        # raise NameError       
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
             im = np.repeat(im, 3, axis=2)
-        if im.shape[2] == 4:
-            im = im[:,:,:-1]
             
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
         gt = torch.tensor(gt, dtype=torch.float32)
-
+        
         sample = {
-        "imidx": torch.from_numpy(np.array(idx)),
-        "image": im,
-        "label": gt,
-        "shape": torch.tensor(im.shape[-2:]),
+            "imidx": torch.from_numpy(np.array(idx)),
+            "image": im,
+            "label": gt,
+            "shape": torch.tensor(im.shape[-2:]),
         }
 
-        if self.transform: 
+        if self.transform and gt.shape[0]: 
             sample = self.transform(sample)
 
         sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here

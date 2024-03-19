@@ -26,6 +26,8 @@ from utils.dataloader_cityscapes import CityScapesDataset
 from utils.dataloader_gtea import GTEADataset
 from utils.dataloader_LVIS import LVISDataset
 from utils.dataloader_BBC038v1 import BBC03bv1Dataset
+from utils.dataloader_woodscape import WoodscapeDataset
+
 #### --------------------- dataloader online ---------------------####
 
 
@@ -58,8 +60,18 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
         for root, dirs, files in os.walk(datasets[i]["im_dir"]): 
             tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
 
-        print(limit, flag,len(tmp_im_list))
+        #print(tmp_im_list)
+        if 'DRAM' in datasets[i]["name"]:
+            tmp_im_list = [x for x in tmp_im_list if 'train' not in x]
+        
+        #print(tmp_im_list)
+        # raise NameError
+        
+        # print("sb")
+        # print(limit, flag,len(tmp_im_list))
 
+        # raise NameError
+        
         if flag=='train' and limit!=-1 and len(tmp_im_list)>limit:
             tmp_im_list=tmp_im_list[:limit]
         if "BBC038v1" in datasets[i]["name"]:   
@@ -76,8 +88,14 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
             tmp_gt_list = []
         else:
             tmp_gt_list = [x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]) for x in tmp_im_list]
+            if 'DRAM' in datasets[i]["name"]:
+                tmp_gt_list = [x.replace('test_images', 'test_targets_color') for x in tmp_gt_list]  
+            
+            # print(tmp_gt_list)
+            # raise NameError
             tmp_gt_list = [x for x in tmp_gt_list if os.path.exists(x)]
-            tmp_im_list = [x for x in tmp_im_list if os.path.exists(x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]))]
+            if 'DRAM' not in datasets[i]["name"]:
+                tmp_im_list = [x for x in tmp_im_list if os.path.exists(x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]))]
         
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
@@ -125,6 +143,7 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
     else:
         for i in range(len(name_im_gt_list)):  
             if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            elif 'woodscape' in name_im_gt_list[i]['dataset_name']: gos_dataset = WoodscapeDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             #ADE dataloader 三通道 排除了[0 0 0]
             elif 'ADE' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #cityscapes 单通道 什么也没排除
@@ -133,8 +152,13 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
             elif 'voc2012_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = VOC2012Dataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #coco格式
             elif 'coco' in name_im_gt_list[i]['dataset_name']: gos_dataset = COCODataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #DRAM 三通道 排除了[0 0 0]
+            elif 'DRAM' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            elif 'streets' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #ppnls 三通道 排除了[0 0 0]
             elif 'ppdls' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
+            #ibd 单通道 排除了[0]
+            elif 'ibd' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #gtea 单通道 排除了[0]
             elif 'gtea' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #ishape 单通道 排除了[0]
