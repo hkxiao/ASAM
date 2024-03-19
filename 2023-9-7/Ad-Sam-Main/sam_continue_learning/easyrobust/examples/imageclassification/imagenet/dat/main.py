@@ -389,6 +389,8 @@ def main():
 
     random_seed(args.seed, args.rank)
 
+    # print(args.model)
+    # raise NameError
     model = create_model(
         args.model,
         pretrained=args.pretrained,
@@ -663,10 +665,10 @@ def main():
             if args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
                 loader_train.sampler.set_epoch(epoch)
 
-            train_metrics = train_one_epoch(
-                epoch, model, loader_train, optimizer, train_loss_fn, args,
-                lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
-                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
+            # train_metrics = train_one_epoch(
+            #     epoch, model, loader_train, optimizer, train_loss_fn, args,
+            #     lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
+            #     amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
 
             if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
                 if args.local_rank == 0:
