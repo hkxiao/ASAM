@@ -12,21 +12,20 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import cv2
-from sam_continue_learning.segment_anything import sam_model_registry_baseline, SamPredictor
+from sam_continue_learning.segment_anything_training import sam_model_registry
 import os
 
 
 def get_model(model, model_type):
     home_path = 'home_path'
     if model == 'sam':
-        if model_type == "vit_b": sam_checkpoint = "sam_continue_learning/pretrained_checkpoint/sam_vit_b_01ec64.pth"
+        if model_type == "vit_b": sam_checkpoint = "../../2023-12-19/ASAM-Main/sam_continue_learning/pretrained_checkpoint/sam_vit_b_01ec64.pth"
         if model_type == "vit_l": sam_checkpoint = "sam_continue_learning/pretrained_checkpoint/sam_vit_l_0b3195.pth"
         if model_type == "vit_h": sam_checkpoint = "sam_continue_learning/pretrained_checkpoint/sam_vit_h_4b8939.pth"
         
         device = "cuda"
-        sam = sam_model_registry_baseline[model_type](checkpoint=sam_checkpoint)
+        sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
         sam.to(device=device)
-        predictor = SamPredictor(sam_model=sam)
         return sam
     
     elif model == 'resnet50':
