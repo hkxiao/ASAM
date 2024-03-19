@@ -12,9 +12,9 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import cv2
-from sam_continue_learning.segment_anything import sam_model_registry_baseline, SamPredictor
+from sam_continue_learning.segment_anything_training import sam_model_registry
 import os
-
+from sam_continue_learning.efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
 
 def get_model(model, model_type):
     home_path = 'home_path'
@@ -24,11 +24,18 @@ def get_model(model, model_type):
         if model_type == "vit_h": sam_checkpoint = "sam_continue_learning/pretrained_checkpoint/sam_vit_h_4b8939.pth"
         
         device = "cuda"
-        sam = sam_model_registry_baseline[model_type](checkpoint=sam_checkpoint)
+        sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
         sam.to(device=device)
-        predictor = SamPredictor(sam_model=sam)
         return sam
-    
+    elif model == 'sam_efficient':
+        
+        if model_type == "vit_t": sam_checkpoint = torch.load("sam_continue_learning/pretrained_checkpoint/efficient_sam_vitt.pt")['model']
+        if model_type == "vit_s": sam_checkpoint = torch.load("sam_continue_learning/pretrained_checkpoint/efficient_sam_vits.pt")['model']
+        
+        if model_type == 'vit_t': sam = build_efficient_sam_vitt()
+        if model_type == 'vit_s': sam = build_efficient_sam_vits()      
+        sam.load_state_dict(sam_checkpoint)
+        return sam
     elif model == 'resnet50':
         net = torchvision.models.resnet50(pretrained=True)
         #net.load_state_dict(torch.load(os.path.join(home_path, 'checkpoints/resnet50-0676ba61.pth')))

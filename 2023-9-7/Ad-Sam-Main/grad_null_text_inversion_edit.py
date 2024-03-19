@@ -95,6 +95,10 @@ mean = torch.Tensor(mean).cuda()
 std = torch.Tensor(std).cuda()
 
 net = get_model(args.model, args.model_type)
+
+# print(type(net))
+# raise NameError
+
 if device == 'cuda':
     net.to(device)
     cudnn.benchmark = True
@@ -655,22 +659,46 @@ def text2image_ldm_stable_last(
 
             #net_predictor.set_torch_image(image_m*255.0,original_image_size=(1024,1024))
             #ad_masks, ad_iou_predictions, ad_low_res_logits = net_predictor.predict_torch(point_coords=None,point_labels=None, boxes=boxes, multimask_output=False)
-            example = {}
-            example['image'] = image_m[0]*255.0
-            example['boxes'] = boxes
-            example['original_size'] = image_size
-            output, interbeddings = net([example], multimask_output=False)
-            output = output[0]
-            print(type(output))
-            
-            print(example['image'].dtype, example['boxes'].dtype)
-            #raise NameError
-            ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
-                      
+            if args.model == 'sam':
+                example = {}
+                example['image'] = image_m[0]*255.0
+                example['boxes'] = boxes
+                example['original_size'] = image_size
+                output, interbeddings = net([example], multimask_output=False)
+                output = output[0]
+                print(type(output))
+                
+                print(example['image'].dtype, example['boxes'].dtype)
+                #raise NameError
+                ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
+            elif args.model == 'sam_efficient':
+
+                input_points = boxes.reshape(1,-1,2,2)
+                input_labels = torch.concat([torch.full((1,boxes.shape[0],1),3), torch.full((1,boxes.shape[0],1),4)] ,-1).cuda()
+                # print(input_labels, input_labels.shape)
+                # print(image_m.shape,torch.max(image_m))
+                # raise NameError         
+                predicted_logits, predicted_iou = net(
+                    image_m,
+                    input_points,
+                    input_labels,
+                )
+                sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
+                predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
+                print(predicted_logits.shape)
+                predicted_logits = torch.take_along_dim(
+                    predicted_logits, sorted_ids[..., None, None], dim=2
+                )
+                # print(predicted_logits.shape)
+                ad_low_res_logits = F.interpolate(predicted_logits[0,:,:1,:,:],(256,256),mode='bilinear',align_corners=False)
+                ad_masks = torch.ge(ad_low_res_logits,0)
+                # print(ad_low_res_logits.shape)
+                
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
             loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
 
             iou = compute_iou(ad_low_res_logits, label_masks_256).item()
+            print("iou:",iou)
             if iou < worst_iou:                
                 best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
                     
@@ -793,7 +821,7 @@ if __name__ == '__main__':
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("../../2023-12-19/ASAM-Main/ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     # ldm_stable.enable_model_cpu_offload()
     
     try:
@@ -867,6 +895,7 @@ if __name__ == '__main__':
             label_mask = Image.open(label_mask_path).convert('L').resize((512,512)) 
             label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
             sup_masks = torch.cat([sup_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
+        # label_masks = label_masks[-1:]
         
         boxes = masks_to_boxes(label_masks.squeeze())    
         #print(torch.max(boxes))
