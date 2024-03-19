@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import cv2
 from sam_continue_learning.segment_anything_training import sam_model_registry
 import os
-
+from sam_continue_learning.efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
 
 def get_model(model, model_type):
     home_path = 'home_path'
@@ -27,7 +27,15 @@ def get_model(model, model_type):
         sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
         sam.to(device=device)
         return sam
-    
+    elif model == 'sam_efficient':
+        
+        if model_type == "vit_t": sam_checkpoint = torch.load("sam_continue_learning/pretrained_checkpoint/efficient_sam_vitt.pt")['model']
+        if model_type == "vit_s": sam_checkpoint = torch.load("sam_continue_learning/pretrained_checkpoint/efficient_sam_vits.pt")['model']
+        
+        if model_type == 'vit_t': sam = build_efficient_sam_vitt()
+        if model_type == 'vit_s': sam = build_efficient_sam_vits()      
+        sam.load_state_dict(sam_checkpoint)
+        return sam
     elif model == 'resnet50':
         net = torchvision.models.resnet50(pretrained=True)
         #net.load_state_dict(torch.load(os.path.join(home_path, 'checkpoints/resnet50-0676ba61.pth')))

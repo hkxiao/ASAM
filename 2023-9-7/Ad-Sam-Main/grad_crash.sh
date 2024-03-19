@@ -5,10 +5,10 @@ start_program() {
     python $2 \
     --ddim_steps=50 \
     --save_root=output/sa_000000-Grad \
-    --data_root=sam-1b/sa_000000 \
-    --control_mask_dir=sam-1b/sa_000000 \
-    --caption_path=sam-1b/sa_000000-blip2-caption.json \
-    --controlnet_path=ckpt/control_v11p_sd15_mask_sa000002.pth \
+    --data_root=../../2023-12-19/ASAM-Main/sam-1b/sa_000000 \
+    --control_mask_dir=../../2023-12-19/ASAM-Main/sam-1b/sa_000000 \
+    --caption_path=../../2023-12-19/ASAM-Main/sam-1b/sa_000000-blip2-caption.json \
+    --controlnet_path=../../2023-12-19/ASAM-Main/ckpt/control_v11p_sd15_mask_sa000002.pth \
     --sam_batch=140 \
     --eps=0.4 \
     --steps=10 \
@@ -26,10 +26,6 @@ start_program() {
 CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
 start=(1 500 1000 1500 2000 2500 3000 3500)
 end=(500 1000 1500 2000 2500 3000 3500 4000)
-
-CUDA_VISIBLE_DEVICES_LIST=(0) 
-start=(10981)
-end=(10981)
 
 PID_LIST=()
 STATUS=()

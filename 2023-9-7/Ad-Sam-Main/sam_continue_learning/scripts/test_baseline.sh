@@ -13,9 +13,9 @@ python -m torch.distributed.launch --nproc_per_node=8 --master_port=30007  main.
 --eval \
 --prompt_type box \
 --train-datasets dataset_sa000000 \
---valid-datasets dataset_hrsod_val dataset_camo dataset_big_val dataset_BBC038v1 dataset_DOORS1 dataset_DOORS2 dataset_ZeroWaste dataset_ndis_train dataset_Plittersdorf_test dataset_egohos dataset_LVIS \
---baseline \
---visualize
+--valid-datasets dataset_pascal_part201 \
+--load_prefix=../../../2023-12-19/ASAM-Main/sam_continue_learning \
+--baseline 
 # --visualize \
 # --baseline
 #--valid-datasets dataset_camo dataset_big_val dataset_BBC038v1 dataset_DOORS1 dataset_DOORS2 dataset_ZeroWaste dataset_ndis_train dataset_Plittersdorf_test dataset_egohos dataset_LVIS \

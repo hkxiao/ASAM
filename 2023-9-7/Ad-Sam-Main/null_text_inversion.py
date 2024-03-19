@@ -664,7 +664,7 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("../../2023-12-19/ASAM-Main/ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
@@ -708,7 +708,7 @@ if __name__ == '__main__':
         uncond_path = f"{args.save_root}/embeddings/sa_{i}_uncond.pth"
         if os.path.exists(latent_path) and os.path.exists(uncond_path):
             print(latent_path, uncond_path, " has existed!")
-            continue
+            #continue
         
         # load catpion
         prompt = captions[img_path.split('/')[-1]]
@@ -730,6 +730,8 @@ if __name__ == '__main__':
         torch.save(x_t, f'{args.save_root}/embeddings/sa_{i}_latent.pth')
         torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/sa_{i}_uncond.pth')
         
+        
+        # raise NameError
         # show 
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)

@@ -153,3 +153,9 @@ dmypy.json
 *.gz
 
 **/data/
+**/ckpt
+**/train_output_sdxl
+**/sam-1b
+*.jpeg
+*.JPEG
+
