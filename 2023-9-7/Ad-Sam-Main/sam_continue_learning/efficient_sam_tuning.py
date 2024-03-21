@@ -760,7 +760,6 @@ if __name__ == "__main__":
         "gt_dir": "data/HRSOD-TE/gts",
         "im_ext": ".jpg",
         "gt_ext": ".png"}
-
     
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
         "im_dir": "data/ADE20K_2016_07_26/images/validation",
@@ -842,10 +841,9 @@ if __name__ == "__main__":
         "gt_ext": "_label.png"
     }
     
-    
     dataset_gtea_train = {"name": "gtea",
-        "im_dir": "data/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "data/GTEA_GAZE_PLUS/Masks",
+        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
@@ -934,6 +932,12 @@ if __name__ == "__main__":
         "annotation_file": "data/NDD20/ABOVE_LABELS.json",
         "im_ext": ".jpg",
     }
+
+    dataset_NDD20_BELOW = {"name": "NDD20_coco",
+        "im_dir": "data/NDD20/BELOW",
+        "annotation_file": "data/NDD20/BELOW_LABELS.json",
+        "im_ext": ".jpg",
+    }   
         
     dataset_PIDRAY = {"name": "pid_coco",
         "im_dir": "data/pidray/hard",
