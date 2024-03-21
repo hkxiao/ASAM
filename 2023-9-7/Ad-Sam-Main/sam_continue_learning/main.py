@@ -919,6 +919,19 @@ if __name__ == "__main__":
         "im_ext": ".png",
     }
     
+    dataset_ppdls = {"name": "ppdls",
+        "im_dir": "data/Plant_Phenotyping",
+        "gt_dir": "data/Plant_Phenotyping",
+        "im_ext": "_rgb.png",
+        "gt_ext": "_label.png"
+    }
+     
+    dataset_streets = {"name": "streets",
+        "im_dir": "data/Streets/images",
+        "gt_dir": "data/Streets/labels",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
     
     dataset_paco_lvis = {"name": "PACO_LVIS_coco",
         "im_dir": "data/PACO/",
@@ -997,6 +1010,12 @@ if __name__ == "__main__":
         "annotation_file": "data/NDD20/ABOVE_LABELS.json",
         "im_ext": ".jpg",
     }
+    
+    dataset_NDD20_BELOW = {"name": "NDD20_coco",
+        "im_dir": "data/NDD20/BELOW",
+        "annotation_file": "data/NDD20/BELOW_LABELS.json",
+        "im_ext": ".jpg",
+    }   
         
     dataset_PIDRAY = {"name": "pid_coco",
         "im_dir": "data/pidray/hard",
