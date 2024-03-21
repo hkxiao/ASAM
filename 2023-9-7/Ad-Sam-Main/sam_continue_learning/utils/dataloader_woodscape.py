@@ -19,10 +19,10 @@ import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
 import json
 from pycocotools import mask
+from PIL import Image, ImageDraw
 
-
-class Ade20kDataset(Dataset):
-    def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False,batch_size_prompt=-1):
+class WoodscapeDataset(Dataset):
+    def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False, batch_size_prompt=-1, batch_size_prompt_start=0):
 
         self.transform = transform
         self.dataset = {}
@@ -32,6 +32,7 @@ class Ade20kDataset(Dataset):
         im_name_list = [] # image name
         im_path_list = [] # im path
         gt_path_list = [] # gt path
+        gt_num_list = [] # gt path
         im_ext_list = [] # im ext
         gt_ext_list = [] # gt ext
         for i in range(0,len(name_im_gt_list)):
@@ -46,6 +47,7 @@ class Ade20kDataset(Dataset):
             im_ext_list.extend([name_im_gt_list[i]["im_ext"] for x in name_im_gt_list[i]["im_path"]])
             gt_ext_list.extend([name_im_gt_list[i]["gt_ext"] for x in name_im_gt_list[i]["gt_path"]])
 
+
         self.dataset["data_name"] = dt_name_list
         self.dataset["im_name"] = im_name_list
         self.dataset["im_path"] = im_path_list
@@ -57,56 +59,71 @@ class Ade20kDataset(Dataset):
 
         self.eval_ori_resolution = eval_ori_resolution
         self.batch_size_prompt = batch_size_prompt
+        self.batch_size_prompt_start = batch_size_prompt_start
         
         #To DO: open all instance
         self.all_instance = batch_size_prompt
+
     def __len__(self):
         return len(self.dataset["im_path"])
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
-        gt_path = self.dataset["gt_path"][idx]
-        
-        im = io.imread(im_path)
-        naive_gt = io.imread(gt_path)        
-        
-        if len(naive_gt.shape) < 3:
-            naive_gt = naive_gt[:, :, np.newaxis]
-        if naive_gt.shape[2] == 1:
-            naive_gt = np.repeat(naive_gt, 3, axis=2)
-        
-        naive_gt = naive_gt[...,0] + naive_gt[...,1]*(1<<8) + naive_gt[...,2]*(1<<16)
-        unique_list = sorted(np.unique(naive_gt))
-        
-        gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
-        for i in unique_list:
-            if i == 0: continue
-            tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
-            tmp_gt[naive_gt==i]=255
-            gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
+        gt_path = self.dataset["gt_path"][idx]    
 
+        try:
+            im = io.imread(im_path)
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            print(f"Problematic image path: {im_path}")
+            
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
             im = np.repeat(im, 3, axis=2)
-        if im.shape[2] == 4:
-            im = im[:,:,:-1]
+                
+        gt = None
+
             
+        # print(im.shape, im_path)
+        # raise NameError
+        
+        gt = torch.empty(0, im.shape[0], im.shape[1])
+        json_dict = json.load(open(gt_path, 'r'))
+        
+        
+        # print(im_path)
+        for idx,annotation in enumerate(json_dict[gt_path.split('/')[-1]]['annotation']):
+            segment = annotation['segmentation']
+            
+            poly_points = [(int(point[0]), int(point[1])) for point in segment]
+            poly_mask = Image.new('L', (im.shape[1], im.shape[0]), 0)
+            ImageDraw.Draw(poly_mask).polygon(poly_points, outline=1, fill=1)
+            
+            # 将当前区域的mask叠加到整体mask中
+            #print(np.max(poly_mask))
+            # import cv2
+            # cv2.imwrite('demo'+str(idx)+'.png', np.array(poly_mask) * 255)
+            # # raise NameError
+            # print(torch.sum(torch.from_numpy(np.array(poly_mask)).unsqueeze(0)))
+            gt = torch.concat([gt, torch.from_numpy(np.array(poly_mask)).unsqueeze(0)])
+        
+        # raise NameError
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
-        gt = torch.tensor(gt, dtype=torch.float32)
+        gt = torch.tensor(gt, dtype=torch.float32) * 255.0
 
         sample = {
-        "imidx": torch.from_numpy(np.array(idx)),
-        "image": im,
-        "label": gt,
-        "shape": torch.tensor(im.shape[-2:]),
+            "imidx": torch.from_numpy(np.array(idx)),  
+            "image": im,   # 3 H W
+            "label": gt,   # N H W
+            "shape": torch.tensor(im.shape[-2:]),
         }
 
         if self.transform: 
             sample = self.transform(sample)
 
-        sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
-        sample['ori_im_path'] = self.dataset["im_path"][idx]
-        sample['ori_gt_path'] = self.dataset["gt_path"][idx]
-
+        if self.eval_ori_resolution:
+            sample["ori_label"] = sample['label']  # NOTE for evaluation only. And no flip here
+            sample['ori_im_path'] = im_path
+            sample['ori_gt_path'] = gt_path
         return sample

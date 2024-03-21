@@ -401,6 +401,41 @@ def masks_to_boxes(masks):
     return torch.stack([x_min, y_min, x_max, y_max], 1)
 
 
+
+def masks_to_boxes_with_random_scaling(masks, scale):
+    if masks.numel() == 0:
+        return torch.zeros((0, 4), device=masks.device)
+
+    h, w = masks.shape[-2:]
+
+    y = torch.arange(0, h, dtype=torch.float)
+    x = torch.arange(0, w, dtype=torch.float)
+    y, x = torch.meshgrid(y, x)
+    y = y.to(masks)
+    x = x.to(masks)
+
+    x_mask = ((masks > 128) * x.unsqueeze(0))
+    x_max = x_mask.flatten(1).max(-1)[0]
+    x_min = x_mask.masked_fill(~(masks > 128), 1e8).flatten(1).min(-1)[0]
+
+    y_mask = ((masks > 128) * y.unsqueeze(0))
+    y_max = y_mask.flatten(1).max(-1)[0]
+    y_min = y_mask.masked_fill(~(masks > 128), 1e8).flatten(1).min(-1)[0]
+
+    # 计算每个box的面积
+    box_areas = (x_max - x_min) * (y_max - y_min)
+
+    # 随机生成缩小因子（在0.9到1之间）
+    scaling_factor = torch.rand(box_areas.shape, device=masks.device) * (1 - scale) + scale
+
+    # 将box的边界框坐标按照缩小因子进行调整
+    x_min = x_min + (x_max - x_min) * (1 - scaling_factor) / 2
+    x_max = x_max - (x_max - x_min) * (1 - scaling_factor) / 2
+    y_min = y_min + (y_max - y_min) * (1 - scaling_factor) / 2
+    y_max = y_max - (y_max - y_min) * (1 - scaling_factor) / 2
+
+    return torch.stack([x_min, y_min, x_max, y_max], 1)
+
 def box_cxcywh_to_xyxy(x):
     x_c, y_c, w, h = x.unbind(-1)
     b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
