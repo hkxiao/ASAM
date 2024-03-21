@@ -919,12 +919,6 @@ if __name__ == "__main__":
         "im_ext": ".png",
     }
     
-    dataset_gtea_train = {"name": "gtea",
-        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
-        "im_ext": ".jpg",
-        "gt_ext": ".png"
-    }
     
     dataset_paco_lvis = {"name": "PACO_LVIS_coco",
         "im_dir": "data/PACO/",
@@ -1055,6 +1049,13 @@ if __name__ == "__main__":
         "gt_dir": "data/WoodScape/instance_annotations",
         "im_ext": ".png",
         "gt_ext": ".json"
+    }
+    
+    dataset_gtea_train = {"name": "gtea",
+        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     # medical dataset
