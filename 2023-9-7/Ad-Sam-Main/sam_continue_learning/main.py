@@ -919,12 +919,6 @@ if __name__ == "__main__":
     }
     
     
-    dataset_gtea_train = {"name": "gtea",
-        "im_dir": "data/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "data/GTEA_GAZE_PLUS/Masks",
-        "im_ext": ".jpg",
-        "gt_ext": ".png"
-    }
     
     dataset_streets = {"name": "streets",
         "im_dir": "data/Streets/images",
@@ -1010,6 +1004,12 @@ if __name__ == "__main__":
         "annotation_file": "data/NDD20/ABOVE_LABELS.json",
         "im_ext": ".jpg",
     }
+    
+    dataset_NDD20_BELOW = {"name": "NDD20_coco",
+        "im_dir": "data/NDD20/BELOW",
+        "annotation_file": "data/NDD20/BELOW_LABELS.json",
+        "im_ext": ".jpg",
+    }   
         
     dataset_PIDRAY = {"name": "pid_coco",
         "im_dir": "data/pidray/hard",
@@ -1062,6 +1062,13 @@ if __name__ == "__main__":
         "gt_dir": "data/WoodScape/instance_annotations",
         "im_ext": ".png",
         "gt_ext": ".json"
+    }
+    
+    dataset_gtea_train = {"name": "gtea",
+        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     # medical dataset
