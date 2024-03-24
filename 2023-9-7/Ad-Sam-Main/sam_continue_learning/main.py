@@ -548,9 +548,9 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     # merge sam and tune_decoder
     if misc.is_main_process():        
         sam_checkpoint_map = {
-        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
         }
         sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
 
@@ -612,11 +612,6 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
-<<<<<<< HEAD
-            #print(inputs_val.shape, labels_val.shape, torch.max(labels_ori))
-            
-=======
->>>>>>> 34052b4524d8526b61edbd2c828b16e17c2a2bf4
             # labels_val_np = labels_val[0,0,...].cpu().data.numpy()
             # cv2.imwrite("tmp.png",labels_val_np*255.0)
             # raise NameError
@@ -882,17 +877,10 @@ if __name__ == "__main__":
     }
     
     dataset_ppdls = {"name": "ppdls",
-        "im_dir": "data/Plant_Phenotyping_Datasets",
-        "gt_dir": "data/Plant_Phenotyping_Datasets",
+        "im_dir": "data/Plant_Phenotyping",
+        "gt_dir": "data/Plant_Phenotyping",
         "im_ext": "_rgb.png",
         "gt_ext": "_label.png"
-    }
-    
-    dataset_gtea_train = {"name": "gtea",
-        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
-        "im_ext": ".jpg",
-        "gt_ext": ".png"
     }
     
     
@@ -917,13 +905,7 @@ if __name__ == "__main__":
             "gt_ext": ".png"
     }
     
-    dataset_streets = {"name": "streets_coco",
-        "im_dir": "data/vehicleannotations/images",
-        "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
-        "im_ext": ".jpg",
-    }
     
-        
     dataset_ImagenetPart = {"name": "ImagenetPart",
         "im_dir": "data/PartImageNet/images/test",
         "gt_dir": "data/PartImageNet/annotations/test",
@@ -932,30 +914,23 @@ if __name__ == "__main__":
     }
     
     dataset_TimberSeg = {"name": "timberseg_coco",
-        "im_dir": "data/y5npsm3gkj-2/prescaled/",
-        "annotation_file": "data/y5npsm3gkj-2/prescaled/coco_annotation_rotated.json",
+        "im_dir": "data/TimberSeg/prescaled/",
+        "annotation_file": "data/TimberSeg/prescaled/coco_annotation_rotated.json",
         "im_ext": ".png",
     }
     
     dataset_ppdls = {"name": "ppdls",
-        "im_dir": "data/Plant_Phenotyping_Datasets",
-        "gt_dir": "data/Plant_Phenotyping_Datasets",
+        "im_dir": "data/Plant_Phenotyping",
+        "gt_dir": "data/Plant_Phenotyping",
         "im_ext": "_rgb.png",
         "gt_ext": "_label.png"
     }
-    
-    
-    dataset_gtea_train = {"name": "gtea",
-        "im_dir": "data/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "data/GTEA_GAZE_PLUS/Masks",
+     
+    dataset_streets = {"name": "streets",
+        "im_dir": "data/Streets/images",
+        "gt_dir": "data/Streets/labels",
         "im_ext": ".jpg",
         "gt_ext": ".png"
-    }
-    
-    dataset_streets = {"name": "streets_coco",
-        "im_dir": "data/vehicleannotations/images",
-        "annotation_file": "data/vehicleannotations/annotations/vehicle-annotations.json",
-        "im_ext": ".jpg",
     }
     
     dataset_paco_lvis = {"name": "PACO_LVIS_coco",
@@ -1030,11 +1005,18 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_ABOVE = {"name": "NDD20_coco",
+    dataset_NDD20_ABOVE = {"name": "NDD20",
         "im_dir": "data/NDD20/ABOVE",
-        "annotation_file": "data/NDD20/ABOVE_LABELS.json",
+        "gt_dir": "data/NDD20/ABOVE_LABELS",
         "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
+    
+    dataset_NDD20_BELOW = {"name": "NDD20_coco",
+        "im_dir": "data/NDD20/BELOW",
+        "annotation_file": "/data/tanglv/xhk/ASAM/2023-9-7/Ad-Sam-Main/sam_continue_learning/data/COCO2017-val/instances_val2017.json",
+        "im_ext": ".jpg",
+    }   
         
     dataset_PIDRAY = {"name": "pid_coco",
         "im_dir": "data/pidray/hard",
@@ -1056,16 +1038,17 @@ if __name__ == "__main__":
     }
     
     dataset_DRAM_test = {"name": "DRAM",
-        "im_dir": "data/DRAM_raw",
-        "gt_dir": "data/DRAM_raw",
+        "im_dir": "data/DRAM",
+        "gt_dir": "data/DRAM",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
-    dataset_ovis_test = {"name": "ovis_coco",
-            "im_dir": "data/OVIS/test",
-            "annotation_file": "data/OVIS/annotations_test.json",
-            "im_ext": ".jpg"
+    dataset_ovis_train = {"name": "ovis",
+        "im_dir": "data/OVIS/train_img",
+        "gt_dir": "data/OVIS/train_labels",
+        "im_ext": ".jpg",
+        "gt_ext": ""
     }
     
     dataset_ibd_val = {"name": "ibd",
@@ -1087,6 +1070,13 @@ if __name__ == "__main__":
         "gt_dir": "data/WoodScape/instance_annotations",
         "im_ext": ".png",
         "gt_ext": ".json"
+    }
+    
+    dataset_gtea_train = {"name": "gtea",
+        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     # medical dataset

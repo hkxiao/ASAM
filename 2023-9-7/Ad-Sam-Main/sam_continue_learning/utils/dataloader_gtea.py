@@ -66,12 +66,20 @@ class GTEADataset(Dataset):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
         
+        # print(im_path, gt_path)
+        # raise NameError
         im = io.imread(im_path)
         naive_gt = io.imread(gt_path)        
         
+        # print(naive_gt.shape)
+        # print(np.max(naive_gt))
+        # raise NameError
+        
         unique_list = sorted(np.unique(naive_gt))        
         gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
-        #print(unique_list)
+        
+        print(len(unique_list))
+        
         for i in unique_list:
             if i==0: continue
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
@@ -86,7 +94,9 @@ class GTEADataset(Dataset):
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
             im = np.repeat(im, 3, axis=2)
-            
+        if im.shape[2] == 4:
+            im = im[:, :, :-1]
+        
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
         gt = torch.tensor(gt, dtype=torch.float32)
