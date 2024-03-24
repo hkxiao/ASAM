@@ -96,9 +96,9 @@ class MaskDecoder_Tuning(MaskDecoder):
         """
         assert model_type in ["vit_b","vit_l","vit_h"]
         
-        checkpoint_dict = {"vit_b":"../pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
-                           "vit_l":"../pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
-                           'vit_h':"../pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
+        checkpoint_dict = {"vit_b":"pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
+                           "vit_l":"pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
+                           'vit_h':"pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
         checkpoint_path = checkpoint_dict[model_type]
         self.load_state_dict(torch.load(checkpoint_path))
         print("Tune Decoder init from SAM MaskDecoder")
@@ -375,9 +375,9 @@ def main(train_datasets, valid_datasets, args):
     
     ### --- Step 2: Model for DistributedDataParallel---    
     sam_checkpoint_map = {
-        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_l_0b3195.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_h_4b8939.pth',
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_l_0b3195.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_h_4b8939.pth',
     }
     sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
     if args.compile: sam = torch.compile(sam)
@@ -523,9 +523,9 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
     if misc.is_main_process():
         
         sam_checkpoint_map = {
-        'vit_b': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_h': '../pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
         }
         sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
         sam_ckpt = torch.load(args.checkpoint)
