@@ -1005,15 +1005,16 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_ABOVE = {"name": "NDD20_coco",
+    dataset_NDD20_ABOVE = {"name": "NDD20",
         "im_dir": "data/NDD20/ABOVE",
-        "annotation_file": "data/NDD20/ABOVE_LABELS.json",
+        "gt_dir": "data/NDD20/ABOVE_LABELS",
         "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     dataset_NDD20_BELOW = {"name": "NDD20_coco",
         "im_dir": "data/NDD20/BELOW",
-        "annotation_file": "data/NDD20/BELOW_LABELS.json",
+        "annotation_file": "/data/tanglv/xhk/ASAM/2023-9-7/Ad-Sam-Main/sam_continue_learning/data/COCO2017-val/instances_val2017.json",
         "im_ext": ".jpg",
     }   
         
@@ -1037,16 +1038,17 @@ if __name__ == "__main__":
     }
     
     dataset_DRAM_test = {"name": "DRAM",
-        "im_dir": "data/DRAM_raw",
-        "gt_dir": "data/DRAM_raw",
+        "im_dir": "data/DRAM",
+        "gt_dir": "data/DRAM",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
-    dataset_ovis_test = {"name": "ovis_coco",
-            "im_dir": "data/OVIS/test",
-            "annotation_file": "data/OVIS/annotations_test.json",
-            "im_ext": ".jpg"
+    dataset_ovis_train = {"name": "ovis",
+        "im_dir": "data/OVIS/train_img",
+        "gt_dir": "data/OVIS/train_labels",
+        "im_ext": ".jpg",
+        "gt_ext": ""
     }
     
     dataset_ibd_val = {"name": "ibd",
