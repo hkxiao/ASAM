@@ -771,10 +771,10 @@ if __name__ == "__main__":
         "im_ext": ".jpg",
         "gt_ext": ""}
     
-    dataset_sa000000_512 = {"name": "sam_subset",
-        "im_dir": "../sam-1b/sa_000000/512",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".jpg",
+    dataset_sa000138_dci = {"name": "sam_subset",
+        "im_dir": "../output/sa_000138-Grad/adv",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".png",
         "gt_ext": ""}
     
     dataset_sa000000adv = {"name": "sam_subset",
