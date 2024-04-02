@@ -674,7 +674,7 @@ def text2image_ldm_stable_last(
             elif args.model == 'sam_efficient':
 
                 input_points = boxes.reshape(1,-1,2,2)
-                input_labels = torch.concat([torch.full((1,boxes.shape[0],1),3), torch.full((1,boxes.shape[0],1),4)] ,-1).cuda()
+                input_labels = torch.concat([torch.full((1,boxes.shape[0],1),2), torch.full((1,boxes.shape[0],1),3)] ,-1).cuda()
                 # print(input_labels, input_labels.shape)
                 # print(image_m.shape,torch.max(image_m))
                 # raise NameError         
@@ -693,6 +693,18 @@ def text2image_ldm_stable_last(
                 ad_low_res_logits = F.interpolate(predicted_logits[0,:,:1,:,:],(256,256),mode='bilinear',align_corners=False)
                 ad_masks = torch.ge(ad_low_res_logits,0)
                 # print(ad_low_res_logits.shape)
+                # raise NameError
+                
+                ## debug efficient sam
+                # for i in range(ad_masks.shape[0]):
+                #     vis_mask = ad_masks[i,0,...].to(torch.float32) * 255.0
+                #     vis_mask = vis_mask.detach().cpu().numpy()
+                #     print(vis_mask.shape)
+                #     cv2.imwrite(f'debug/efficient_mask{str(i)}.png',vis_mask)
+
+                #     vis_mask = label_masks_256[i,0,...].detach().cpu().numpy()
+                #     cv2.imwrite(f'debug/efficient_label{str(i)}.png',vis_mask)
+                # raise NameError
                 
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
             loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
@@ -820,6 +832,8 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
+    # print(args.controlnet_path)
+    # raise NameError
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     # ldm_stable.enable_model_cpu_offload()
