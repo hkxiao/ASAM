@@ -436,13 +436,13 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
             
             # input prompt
-            input_keys = ['point']
+            input_keys = ['box', 'point']
             labels_box = misc.masks_to_boxes(labels) #[K*N 4]
             try:
                 labels_points = misc.masks_sample_points(labels) #[K*N 10 2]
             except:
                 # less than 10 points
-                input_keys = ['box','noise_mask']
+                input_keys = ['box']
             labels_256 = F.interpolate(labels.unsqueeze(1), size=(256, 256), mode='bilinear')
             
             input_type = random.choice(input_keys)
@@ -450,20 +450,18 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             if input_type == 'box':
                 input_points = labels_box.reshape(K,N,2,2)
                 input_labels = torch.concat([torch.full((K,N,1),2), torch.full((K,N,1),3)] ,-1).cuda()
+    
             elif input_type == 'point':
                 point_num = labels_points.shape[-2]
                 input_points = labels_points.view(K,N,point_num,2)
                 input_labels = torch.ones(K,N,point_num)
-
-            # for k,v in sam.named_parameters():
-            #     if v.requires_grad == True: print(v.shape)
-            # raise NameError
             
             predicted_logits, predicted_iou = sam(
                 inputs/255.0,
                 input_points,
                 input_labels,
             )
+            
             sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
             predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
             predicted_logits = torch.take_along_dim(
@@ -674,6 +672,12 @@ if __name__ == "__main__":
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".jpg",
+        "gt_ext": ""}
+
+    dataset_sa000138_dci = {"name": "sam_subset",
+        "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".png",
         "gt_ext": ""}
     
     dataset_sa000000_512 = {"name": "sam_subset",
