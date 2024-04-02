@@ -141,3 +141,12 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+*.pt
+*.zip
+*.onnx
+**/__MACOSX
+**/sa_000000/
+**/sa_000000_canny/
+**/train_output_sd_canny
+**/wandb
