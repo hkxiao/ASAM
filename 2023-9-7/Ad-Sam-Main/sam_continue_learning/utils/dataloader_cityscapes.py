@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
 import json
 from pycocotools import mask
-
+import cv2
 
 class CityScapesDataset(Dataset):
     def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False,batch_size_prompt=-1):
@@ -65,6 +65,7 @@ class CityScapesDataset(Dataset):
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
+        print(gt_path)
         
         im = io.imread(im_path)
         naive_gt = io.imread(gt_path)        
@@ -77,7 +78,9 @@ class CityScapesDataset(Dataset):
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
             tmp_gt[naive_gt==i]=255
             gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
-            
+            # cv2.imwrite(f"demo{str(i)}.png", tmp_gt)
+            gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
+
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:

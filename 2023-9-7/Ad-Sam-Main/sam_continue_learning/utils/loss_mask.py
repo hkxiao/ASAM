@@ -97,7 +97,8 @@ def dice_loss(
     Compute the DICE loss, similar to generalized IOU for masks
     Args:
         inputs: A float tensor of arbitrary shape.
-                The predictions for each example.
+                The predictions for each examp
+                le.
         targets: A float tensor with the same shape as inputs. Stores the binary
                  classification label for each element in inputs
                 (0 for the negative class and 1 for the positive class).

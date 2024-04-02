@@ -85,6 +85,7 @@ class SamDataset(Dataset):
         gt = None
 
         for i in range(self.batch_size_prompt_start, self.batch_size_prompt_start+self.batch_size_prompt):
+            print(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
             tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
             if len(tmp_gt.shape) > 2:
                 tmp_gt = tmp_gt[:, :, 0]

@@ -28,11 +28,16 @@ class COCODataset(Dataset):
         self.coco = COCO(name_im_gt_list['annotation_file'])
         
         self.image_ids = list(self.coco.imgs.keys())
+        # print(self.image_ids,len(self.image_ids))
+        # raise NameError
         # Filter out image_ids without any annotations
+       
         self.image_ids = [image_id for image_id in self.image_ids if len(self.coco.getAnnIds(imgIds=image_id)) > 0]
-                
+        
+        #self.image_ids = [image_id for image_id in self.image_ids if self.coco.loadImgs(image_id)[0]['file_name']=='000000008021.jpg' ]        
         # print('-im-',name_im_gt_list["dataset_name"],self.root_dir, ': ',len(self.image_ids))
         # raise NameError
+    
         self.eval_ori_resolution = eval_ori_resolution
         self.batch_size_prompt = batch_size_prompt
         
@@ -44,8 +49,10 @@ class COCODataset(Dataset):
     
     def __getitem__(self, idx):
         image_id = self.image_ids[idx]
+        # print(len(self.coco.loadImgs(image_id)))
+        
         image_info = self.coco.loadImgs(image_id)[0]
-
+        
         image_path = os.path.join(self.root_dir, image_info['file_name'])
         im = cv2.imread(image_path)
         im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
@@ -71,6 +78,7 @@ class COCODataset(Dataset):
             
         gt = torch.tensor(np.stack(gt)).to(torch.float32) * 255.0
 
+        print(gt.shape)
         sample = {
             "imidx": torch.from_numpy(np.array(idx)),  
             "image": im,   # 3 H W

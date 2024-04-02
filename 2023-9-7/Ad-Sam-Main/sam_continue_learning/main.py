@@ -1050,8 +1050,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/splits_final_deblurred/train/data",
-        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
+        "im_dir": "data/ZeroWaste/train/data",
+        "gt_dir": "data/ZeroWaste/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
