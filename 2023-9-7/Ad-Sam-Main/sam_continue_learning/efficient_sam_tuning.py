@@ -386,15 +386,15 @@ def main(train_datasets, valid_datasets, args):
     _ = sam.to(device=args.device)
     sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
     sam_without_ddp = sam.module
-    if args.restore_sam_model:
-        print("restore sam model from:", args.restore_sam_model)
+    if args.restore_model:
+        print("restore sam model from:", args.restore_model)
         if torch.cuda.is_available():
             try:
-                sam.module.load_state_dict(torch.load(args.restore_sam_model))
+                sam.module.load_state_dict(torch.load(args.restore_model))
             except:
-                sam.module.load_state_dict(torch.load(args.restore_sam_model)['model'])
+                sam.module.load_state_dict(torch.load(args.restore_model)['model'])
         else:
-            sam.module.load_state_dict(torch.load(args.restore_sam_model,map_location="cpu"))
+            sam.module.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
     
     ### --- Step 3: Train or Evaluate ---    
     if not args.eval:
@@ -436,7 +436,7 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
             
             # input prompt
-            input_keys = ['point']
+            input_keys = ['box']
             labels_box = misc.masks_to_boxes(labels) #[K*N 4]
             try:
                 labels_points = misc.masks_sample_points(labels) #[K*N 10 2]
@@ -470,20 +470,45 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
                 predicted_logits, sorted_ids[..., None, None], dim=2
             )
 
-            masks = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
+            masks_0 = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
+            masks_1 = predicted_logits[:,:,1,...].view(K*N,1,1024,1024)
+            masks_2 = predicted_logits[:,:,2,...].view(K*N,1,1024,1024)
 
+            # print(torch.max(masks),torch.min(masks),labels.shape, masks.shape)
+            # raise NameError
             # print(torch.max(masks),labels.shape, masks.shape)
             # # raise NameError
             # cv2.imwrite("demo_gt.png", labels[2].cpu().data.numpy())
-            # cv2.imwrite("demo.png", (masks[2].squeeze().cpu().data.numpy()>0.5)*255.0 )
-            # print(masks.shape)
+            # cv2.imwrite("demo.png", (masks[2].squeeze().cpu().data.numpy()>0.5)*255.0)
+            # print(masks.shape,labels.unsqueeze(1).shape)
             # raise NameError
-            loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
-            loss = loss_mask + loss_dice
             
-            loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
+            # masks = F.interpolate(masks,(256,256),mode='bilinear',align_corners=False)
+            loss_mask_0, loss_dice_0 = loss_masks(masks_0, labels.unsqueeze(1)/255.0, len(masks_0))
+            loss_mask_1, loss_dice_1 = loss_masks(masks_1, labels.unsqueeze(1)/255.0, len(masks_1))
+            loss_mask_2, loss_dice_2 = loss_masks(masks_2, labels.unsqueeze(1)/255.0, len(masks_2))
+            # loss_ce = F.binary_cross_entropy_with_logits(masks, labels.unsqueeze(1)/255.0,)
+            loss_mask = loss_mask_0 + loss_mask_1 + loss_mask_2
+            loss_dice = loss_dice_0 + loss_dice_1 + loss_dice_2
+            #print(labels.shape)
+            loss = loss_mask*0.2 + loss_dice
+            #loss = loss_mask
+            # loss = loss_dice
+            loss_dict = {"loss_mask": loss_mask*0.2, "loss_dice":loss_dice}
 
-            # reduce losses over all GPUs for logging purposes
+            # if loss_dice.item() > 0.5:
+            #     cv2.imwrite("demo_gt.png", labels[0].cpu().data.numpy())
+            #     cv2.imwrite("demo.png", (masks[0].squeeze().cpu().data.numpy()>0.5)*255.0 )
+            #     print(masks.shape,labels.unsqueeze(1).shape)
+                
+            #     masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+            #     imgs_ii = imgs[0].astype(dtype=np.uint8)
+    
+            #     show_anns(labels.cpu(), masks_vis, None, labels_box.cpu(), None, 'demo_show' , imgs_ii, [0]*masks_vis.shape[0], [0]*masks_vis.shape[0])
+
+            #     raise NameError
+            
+            
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             losses_reduced_scaled = sum(loss_dict_reduced.values())
             loss_value = losses_reduced_scaled.item()
@@ -608,7 +633,7 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
             predicted_logits = torch.take_along_dim(
                 predicted_logits, sorted_ids[..., None, None], dim=2
             )
-
+            print(torch.min(predicted_logits), torch.max(predicted_logits))
             masks = predicted_logits[:,:,0,...]
 
             # cv2.imwrite("demo.png", (masks.squeeze().cpu().data.numpy()>0)*255.0 )
@@ -670,6 +695,12 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
 if __name__ == "__main__":
 
     ## Train dataset
+    dataset_sa000000efficient = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""}
+    
     dataset_sa000000 = {"name": "sam_subset",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
@@ -880,19 +911,6 @@ if __name__ == "__main__":
         "annotation_file": "data/plittersdorf/test.json",
         "im_ext": ".jpg",
     }
-    
-    dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/train.json",
-        "im_ext": ".jpg",
-    }
-    
-    dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/val.json",
-        "im_ext": ".jpg",
-    }
-    
         
     dataset_egohos = {"name": "egohos",
         "im_dir": "data/egohos/val/image",
@@ -1017,13 +1035,14 @@ if __name__ == "__main__":
     args = get_args_parser()
     if not args.eval:
         args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type+'-'+str(args.train_img_num))
-    elif args.baseline: 
-        if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
-        else: args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
     elif args.restore_model:
-        args.output = os.path.join(*args.restore_model.split('/')[:-1])
+        args.output = os.path.join('work_dirs', *args.restore_model.split('/')[1:-1])
     else: args.output = 'work_dirs/demo'
-        
+    
+    # print(args.output)
+    # raise NameError
+
+    
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
     valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]
     
