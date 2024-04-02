@@ -163,3 +163,4 @@ dmypy.json
 **/work_dirs/
 **/output/
 **/pretrained_checkpoint
+*.pth
