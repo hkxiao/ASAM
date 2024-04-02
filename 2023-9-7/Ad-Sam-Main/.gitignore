@@ -164,3 +164,8 @@ dmypy.json
 **/output/
 **/pretrained_checkpoint
 *.pth
+utils/generate_caption.py
+utils/modify_json.py
+utils/sam_uncover_mask.py
+utils/split_ControlNet_ckpt.py
+utils/sam_control_signal.py

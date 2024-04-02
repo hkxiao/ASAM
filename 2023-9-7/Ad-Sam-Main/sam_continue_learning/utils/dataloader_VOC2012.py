@@ -88,6 +88,9 @@ class VOC2012Dataset(Dataset):
         im = torch.transpose(torch.transpose(im,1,2),0,1)
         gt = torch.tensor(gt, dtype=torch.float32)
 
+
+        # print(torch.max(im))
+        
         sample = {
         "imidx": torch.from_numpy(np.array(idx)),
         "image": im,
@@ -97,7 +100,9 @@ class VOC2012Dataset(Dataset):
 
         if self.transform: 
             sample = self.transform(sample)
-
+        # print(torch.max(im))
+        
+        # raise NameError
         sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
         sample['ori_im_path'] = self.dataset["im_path"][idx]
         sample['ori_gt_path'] = self.dataset["gt_path"][idx]
