@@ -436,7 +436,7 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
             
             # input prompt
-            input_keys = ['point']
+            input_keys = ['box']
             labels_box = misc.masks_to_boxes(labels) #[K*N 4]
             try:
                 labels_points = misc.masks_sample_points(labels) #[K*N 10 2]
@@ -472,18 +472,38 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
 
             masks = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
 
+            # print(torch.max(masks),torch.min(masks),labels.shape, masks.shape)
+            # raise NameError
             # print(torch.max(masks),labels.shape, masks.shape)
             # # raise NameError
             # cv2.imwrite("demo_gt.png", labels[2].cpu().data.numpy())
-            # cv2.imwrite("demo.png", (masks[2].squeeze().cpu().data.numpy()>0.5)*255.0 )
-            # print(masks.shape)
+            # cv2.imwrite("demo.png", (masks[2].squeeze().cpu().data.numpy()>0.5)*255.0)
+            # print(masks.shape,labels.unsqueeze(1).shape)
             # raise NameError
-            loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
-            loss = loss_mask + loss_dice
             
-            loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
+            # masks = F.interpolate(masks,(256,256),mode='bilinear',align_corners=False)
+            loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
+            loss_ce = F.binary_cross_entropy_with_logits(masks, labels.unsqueeze(1)/255.0)
+            
+            #print(labels.shape)
+            # loss = loss_mask + loss_dice
+            #loss = loss_mask
+            loss = loss_mask + loss_ce
+            loss_dict = {"loss_mask": loss_ce, "loss_dice":loss_dice}
 
-            # reduce losses over all GPUs for logging purposes
+            # if loss_dice.item() > 0.5:
+            #     cv2.imwrite("demo_gt.png", labels[0].cpu().data.numpy())
+            #     cv2.imwrite("demo.png", (masks[0].squeeze().cpu().data.numpy()>0.5)*255.0 )
+            #     print(masks.shape,labels.unsqueeze(1).shape)
+                
+            #     masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+            #     imgs_ii = imgs[0].astype(dtype=np.uint8)
+    
+            #     show_anns(labels.cpu(), masks_vis, None, labels_box.cpu(), None, 'demo_show' , imgs_ii, [0]*masks_vis.shape[0], [0]*masks_vis.shape[0])
+
+            #     raise NameError
+            
+            
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             losses_reduced_scaled = sum(loss_dict_reduced.values())
             loss_value = losses_reduced_scaled.item()
