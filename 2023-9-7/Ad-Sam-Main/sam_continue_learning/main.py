@@ -385,10 +385,6 @@ def main(train_datasets, valid_datasets, args):
     
     if args.restore_model:
         print("restore model from:", args.restore_model)
-        if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write("restore model from:" + args.restore_model)
-                
         if torch.cuda.is_available():
             net_without_ddp.load_state_dict(torch.load(args.restore_model))
         else:
@@ -509,8 +505,6 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
                 dense_prompt_embeddings=dense_embeddings,
                 multimask_output=False
             )
-            print(torch.max(masks),torch.min(masks),labels.shape, masks.shape)
-            raise NameError
             loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
             loss = loss_mask + loss_dice
             
@@ -605,12 +599,9 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     test_stats = {}
     dataset_id = -1
     
-    
     for k in range(len(valid_dataloaders)):
         dataset_id += 1
         bad_examples = 0
-        good_imgs, good_masks = 0, 0
-
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
@@ -690,8 +681,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     multimask_output=False,
                 )
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-            
-            #print(torch.max(masks), torch.min(masks))
+            #print(masks.shape,labels_ori.shape)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -710,10 +700,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 metric_logger.update(**loss_dict_reduced)
                 continue    
         
-            good_imgs = good_imgs + K
-            good_masks = good_masks + K * N
             
-
             if args.prompt_type =='box':
                 save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
             else:
@@ -743,19 +730,13 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
-        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n'))
-        print((str(valid_datasets[dataset_id]['name'])+' good imgs:'+ str(good_imgs) +'\n'))
-        print((str(valid_datasets[dataset_id]['name'])+' good masks:'+ str(good_masks) +'\n'))
-                
-                
+        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') )
+        
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
             with open(args.output+'/log.txt','a') as f:
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
-                f.write(str(valid_datasets[dataset_id]['name'])+' good imgs:'+ str(good_imgs) +'\n') 
-                f.write(str(valid_datasets[dataset_id]['name'])+' good masks:'+ str(good_masks) +'\n') 
-
 
     return test_stats
 
@@ -772,7 +753,7 @@ if __name__ == "__main__":
         "gt_ext": ""}
     
     dataset_sa000138_dci = {"name": "sam_subset",
-        "im_dir": "../output/sa_000138-Grad/adv",
+        "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000138",
         "im_ext": ".png",
         "gt_ext": ""}
@@ -972,9 +953,9 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf/images",
-        "im_dir": "data/plittersdorf/images",
-        "annotation_file": "data/plittersdorf/test.json",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
         "im_ext": ".jpg",
     }
     
@@ -1050,8 +1031,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/ZeroWaste/train/data",
-        "gt_dir": "data/ZeroWaste/train/sem_seg",
+        "im_dir": "data/splits_final_deblurred/train/data",
+        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
@@ -1121,7 +1102,12 @@ if __name__ == "__main__":
     
     args = get_args_parser()
     if not args.eval:
-        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type+'-'+str(args.train_img_num))
+        args.output = os.path.join('work_dirs', args.output_prefix+'-')
+        for train_dataset in args.train_datasets:
+            args.ouput += train_dataset.replace('dataset_','')
+            args.ouput += '-'
+        args.outpu += str(args.train_img_num) + args.model_type
+        
     elif args.baseline: 
         if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
         else: args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
