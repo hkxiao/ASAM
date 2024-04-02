@@ -162,3 +162,4 @@ dmypy.json
 *.tar
 **/work_dirs/
 **/output/
+**/pretrained_checkpoint

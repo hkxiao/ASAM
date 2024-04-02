@@ -158,4 +158,5 @@ dmypy.json
 **/sam-1b
 *.jpeg
 *.JPEG
+*.tar.gz
 
