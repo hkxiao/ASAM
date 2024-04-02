@@ -124,10 +124,10 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
     if(batch_size>8):
         num_workers_ = 8
     if numworkers!=-1:  num_workers_ = numworkers
-    
+        
     if training:
         for i in range(len(name_im_gt_list)):
-            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True,batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
             else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
             gos_datasets.append(gos_dataset)
 
@@ -142,7 +142,9 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
 
     else:
         for i in range(len(name_im_gt_list)):  
+            print(name_im_gt_list[i]['dataset_name'])
             if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            elif 'ovis' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
             elif 'woodscape' in name_im_gt_list[i]['dataset_name']: gos_dataset = WoodscapeDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             #ADE dataloader 三通道 排除了[0 0 0]
             elif 'ADE' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
@@ -160,6 +162,7 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
             #ibd 单通道 排除了[0]
             elif 'ibd' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #gtea 单通道 排除了[0]
+            elif 'NDD20' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             elif 'gtea' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #ishape 单通道 排除了[0]
             elif 'ishape' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)

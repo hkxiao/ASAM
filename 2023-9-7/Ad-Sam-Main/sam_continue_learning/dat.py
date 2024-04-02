@@ -161,7 +161,7 @@ def replace_best(loss, bloss, batched_input, m):
     return bloss, batched_input
 
 
-def pgd_generator(batched_input, target, model, attack_type='Linf', eps=4/255, attack_steps=3, attack_lr=4/255*2/3, random_start_prob=0.0, targeted=False, attack_criterion='regular', use_best=True, eval_mode=True):
+def pgd_generator(batched_input, target, model, attack_type='L2', eps=4/255, attack_steps=3, attack_lr=4/255*2/3, random_start_prob=0.0, targeted=False, attack_criterion='regular', use_best=True, eval_mode=True):
     # generate adversarial examples
     prev_training = bool(model.training)
     if eval_mode:
@@ -295,6 +295,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('Tune-SAM', add_help=False)
 
     # Base Setting
+    parser.add_argument('--only_attack', action='store_true')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--compile', action='store_true')
@@ -326,13 +327,13 @@ def get_args_parser():
     # Slow start & Fast decay
     parser.add_argument('--warmup_epoch', default=5, type=int)
     parser.add_argument('--gamma', default=0.5, type=float)
-    parser.add_argument('--slow_fast', action='store_true')
+    parser.add_argument('--slow_start', action='store_true')
     
     # Inpit Setting
     parser.add_argument('--input_size', default=[1024,1024], type=list)
     parser.add_argument('--batch_size_train', default=1, type=int)
     parser.add_argument('--batch_size_prompt_start', default=0, type=int)
-    parser.add_argument('--batch_size_prompt', default=-1, type=int)
+    parser.add_argument('--batch_size_prompt', default=4, type=int)
     parser.add_argument('--batch_size_valid', default=1, type=int)
     parser.add_argument('--prompt_type', default='box')
     
@@ -379,8 +380,7 @@ def main(train_datasets, valid_datasets, args):
         train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train")
         train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
                                                         my_transforms = [
-                                                                    RandomHFlip(),
-                                                                    LargeScaleJitter()
+                                                                    Resize(args.input_size)
                                                                     ],
                                                         batch_size = args.batch_size_train,
                                                         batch_size_prompt = args.batch_size_prompt,
@@ -462,7 +462,7 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
     
         for data in metric_logger.log_every(train_dataloaders,10):
             
-            inputs, labels = data['image'], data['label']  # [K 3 1024 1024]   [K N 1024 1024]
+            inputs, labels, ori_im_path = data['image'], data['label'], data['ori_im_path']  # [K 3 1024 1024]   [K N 1024 1024]
             
             K, N, H, W =labels.shape
             if torch.cuda.is_available(): 
@@ -523,7 +523,7 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
             for i,input in enumerate(batched_input):
                 input['image']=imgs_rec[i] 
             
-            advinput = pgd_generator(batched_input, labels_256, sam,attack_type='L2',eps=4, attack_steps=1, attack_lr=4*2  ,attack_criterion=args.attack_criterion, random_start_prob=0.8 ,use_best=False,eval_mode=False)
+            advinput = pgd_generator(batched_input, labels_256, sam,attack_type='L2',eps=4, attack_steps=1, attack_lr=4*2  ,attack_criterion='regular', random_start_prob=0.8 ,use_best=False,eval_mode=False)
             
             imgs_adv = torch.empty(0,3,1024,1024).cuda()
             for input in advinput:
@@ -537,9 +537,16 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 # cv2.imwrite('adv.png',np.flip(img_adv,-1))
                 
                 #print(adv_imgs_rec.max())
-                adv_img_rec = adv_imgs_rec[0].permute(2,1,0).cpu().numpy()
-                cv2.imwrite('adv_rec.png',np.flip(adv_img_rec,-1))
-    
+                # adv_img_rec = adv_imgs_rec[0].permute(2,1,0).cpu().numpy()
+                # cv2.imwrite('.png',np.flip(adv_img_rec,-1))
+
+                if args.only_attack:
+                    img_np = adv_imgs_rec[0].permute(2,1,0).cpu().numpy()
+                    Path(os.path.join(args.output,'adv_examples',train_datasets[0]['name'])).mkdir(parents= True, exist_ok=True)
+                    print(os.path.join(args.output,'adv_examples',train_datasets[0]['name'],ori_im_path[0].split('/')[-1]))
+                    cv2.imwrite(os.path.join(args.output,'adv_examples',train_datasets[0]['name'],ori_im_path[0].split('/')[-1]), img_np[:,:,::-1].astype(np.uint8))
+                    continue
+                
             adv_imgs_rec = F.interpolate(adv_imgs_rec,size=(1024,1024),mode='bilinear',align_corners=False)
             for i,input in enumerate(advinput):
                 input['image']=adv_imgs_rec[i] 
@@ -759,6 +766,12 @@ if __name__ == "__main__":
     ### --------------- Configuring the Train and Valid datasets ---------------
     
     ## Train dataset
+    dataset_sa000000_vis_adversarial_samples = {"name": "sam_subset",
+        "im_dir": "../sam-1b/sa_000000_subset",
+        "gt_dir": "../sam-1b/sa_000000",
+        "im_ext": ".jpg",
+        "gt_ext": ""}
+    
     dataset_sa000000 = {"name": "sam_subset",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",

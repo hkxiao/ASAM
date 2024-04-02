@@ -20,7 +20,6 @@ from utils.loss_mask import loss_masks
 import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR, StepLR
 from pathlib import Path
-from efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
 
 def lr_lambda(epoch):
     if epoch < args.warmup_epoch:
@@ -97,9 +96,9 @@ class MaskDecoder_Tuning(MaskDecoder):
         """
         assert model_type in ["vit_b","vit_l","vit_h"]
         
-        checkpoint_dict = {"vit_b":"../pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
-                           "vit_l":"../pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
-                           'vit_h':"../pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
+        checkpoint_dict = {"vit_b": os.path.join(args.load_prefix,"pretrained_checkpoint/sam_vit_b_maskdecoder.pth"),
+                           "vit_l":"pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
+                           'vit_h':"pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
         checkpoint_path = checkpoint_dict[model_type]
         self.load_state_dict(torch.load(checkpoint_path))
         print("Tune Decoder init from SAM MaskDecoder")
@@ -209,7 +208,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
     if len(masks) == 0:
         return
 
-    print(masks.shape, len(ious), len(boundary_ious))
+    #print(masks.shape, len(ious), len(boundary_ious))
     for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
        
         plt.figure(figsize=(10,10))
@@ -276,6 +275,7 @@ def get_args_parser():
                         help="The path to the hq_decoder training checkpoint for evaluation")
     parser.add_argument('--train-datasets', nargs='+')
     parser.add_argument('--valid-datasets', nargs='+')
+    parser.add_argument('--load_prefix', default='')
     
     # SAM setting
     parser.add_argument("--model-type", type=str, default="vit_l", 
@@ -308,6 +308,7 @@ def get_args_parser():
     parser.add_argument('--train_img_num', default=11186, type=int)
     parser.add_argument('--batch_size_valid', default=1, type=int)
     parser.add_argument('--prompt_type', default='box')
+    parser.add_argument('--point_num', type=int, default=10)
     
     # DDP Setting
     parser.add_argument('--world_size', default=1, type=int,
@@ -374,59 +375,77 @@ def main(train_datasets, valid_datasets, args):
                                                           training=False)
     print(len(valid_dataloaders), " valid dataloaders created")
     
-    ### --- Step 2: Model for DistributedDataParallel---    
-    sam = build_efficient_sam_vitt(checkpoint='pretrained_checkpoint/efficient_sam_vitt.pt')
+    ### --- Step 2: Model for DistributedDataParallel---
+    net = MaskDecoder_Tuning(args.model_type) 
+    if args.compile: net = torch.compile(net)
+    if torch.cuda.is_available():
+        net.cuda()
+    net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+    net_without_ddp = net.module
+    
+    if args.restore_model:
+        print("restore model from:", args.restore_model)
+        if torch.cuda.is_available():
+            net_without_ddp.load_state_dict(torch.load(args.restore_model))
+        else:
+            net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
 
-    for k, v in sam.named_parameters():
-        if ('iou_token'  not in k) and ('mask_tokens' not in k): v.requires_grad = False
-        else: 
-            print(k, v.shape)
-    # raise NameError
+    parameters_grad, parameters_no_grad = 0, 0
+    for n,p in net_without_ddp.named_parameters():
+        if p.requires_grad: parameters_grad += 1
+        else: parameters_no_grad += 1
+    print("parameters_grad Number:", parameters_grad)
+    print("parameters_no_grad Number:", parameters_no_grad)
+    
+    
+    sam_checkpoint_map = {
+        'vit_b': os.path.join(args.load_prefix,'pretrained_checkpoint/sam_vit_b_01ec64.pth'),
+        'vit_l': 'pretrained_checkpoint/sam_vit_l_0b3195.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_h_4b8939.pth',
+    }
+    sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
     if args.compile: sam = torch.compile(sam)
     _ = sam.to(device=args.device)
     sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-    sam_without_ddp = sam.module
-    if args.restore_model:
-        print("restore sam model from:", args.restore_model)
+    if args.restore_sam_model:
+        print("restore sam model from:", args.restore_sam_model)
         if torch.cuda.is_available():
-            try:
-                sam.module.load_state_dict(torch.load(args.restore_model))
-            except:
-                sam.module.load_state_dict(torch.load(args.restore_model)['model'])
+            sam.module.load_state_dict(torch.load(args.restore_sam_model))
         else:
-            sam.module.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
+            sam.module.load_state_dict(torch.load(args.restore_sam_model,map_location="cpu"))
+    
     
     ### --- Step 3: Train or Evaluate ---    
     if not args.eval:
         print("--- define optimizer ---")
-        optimizer = optim.Adam(sam_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
+        optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
         if not args.slow_start:
             lr_scheduler = StepLR(optimizer, args.lr_drop_epoch)
-            lr_scheduler.last_epoch = args.start_epoch
+            lr_scheduler.last_epoch=args.start_epoch
         else:
             print("slow start & fast decay")
             lr_scheduler = LambdaLR(optimizer, lr_lambda)
 
-        train(args, sam, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
+        train(args, net, sam, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     else:
-        evaluate(args, sam, valid_dataloaders, args.visualize)
+        evaluate(args, net, sam, valid_dataloaders, args.visualize)
 
 
-def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
+def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
     epoch_start = args.start_epoch
     epoch_num = args.max_epoch_num
 
-    sam.train()
-    _ = sam.to(device=args.device)
+    net.train()
+    _ = net.to(device=args.device)
         
     for epoch in range(epoch_start,epoch_num): 
-
         print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
  
         metric_logger = misc.MetricLogger(delimiter="  ")
         train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
-        
+    
         for data in metric_logger.log_every(train_dataloaders,10):
+            
             inputs, labels = data['image'], data['label']  # [K 3 1024 1024]   [K N 1024 1024]
             K, N, H, W =labels.shape
             if torch.cuda.is_available(): 
@@ -436,7 +455,11 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
             
             # input prompt
+<<<<<<< HEAD
             input_keys = ['box', 'point']
+=======
+            input_keys = ['box','point','noise_mask']
+>>>>>>> 9d34c38d4e24265161f905b80814d013f476b0f1
             labels_box = misc.masks_to_boxes(labels) #[K*N 4]
             try:
                 labels_points = misc.masks_sample_points(labels) #[K*N 10 2]
@@ -444,6 +467,7 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
                 # less than 10 points
                 input_keys = ['box']
             labels_256 = F.interpolate(labels.unsqueeze(1), size=(256, 256), mode='bilinear')
+<<<<<<< HEAD
             
             input_type = random.choice(input_keys)
 
@@ -498,15 +522,56 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             #     cv2.imwrite("demo_gt.png", labels[0].cpu().data.numpy())
             #     cv2.imwrite("demo.png", (masks[0].squeeze().cpu().data.numpy()>0.5)*255.0 )
             #     print(masks.shape,labels.unsqueeze(1).shape)
-                
-            #     masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-            #     imgs_ii = imgs[0].astype(dtype=np.uint8)
-    
-            #     show_anns(labels.cpu(), masks_vis, None, labels_box.cpu(), None, 'demo_show' , imgs_ii, [0]*masks_vis.shape[0], [0]*masks_vis.shape[0])
+=======
+            labels_noisemask = misc.masks_noise(labels_256) #[K*N 1 256 256]
 
-            #     raise NameError
+            batched_input = []
             
+            for bi in range(len(imgs)):
+                dict_input = dict()
+                input_image = torch.as_tensor(imgs[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
+                dict_input['image'] = input_image 
+
+                input_type = random.choice(input_keys)
+                sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
+                if input_type == 'box':
+                    dict_input['boxes'] = labels_box[sparse_slice,...]  #N*4
+                elif input_type == 'point':
+                    point_coords = labels_points[sparse_slice,...] # N 10 2
+                    dict_input['point_coords'] = point_coords
+                    dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
+                elif input_type == 'noise_mask':
+                    dict_input['mask_inputs'] = labels_noisemask[dense_slice] # N 1 256 256
+
+                else:
+                    raise NotImplementedError
+
+                dict_input['original_size'] = imgs[0].shape[:2]
+>>>>>>> 9d34c38d4e24265161f905b80814d013f476b0f1
+                
+                batched_input.append(dict_input)
+            with torch.no_grad():
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
             
+            batch_len = len(batched_output)
+            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
+            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
+            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
+            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+
+            masks = net(
+                image_embeddings=encoder_embedding,
+                image_pe=image_pe,
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=False
+            )
+            loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
+            loss = loss_mask + loss_dice
+            
+            loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
+
+            # reduce losses over all GPUs for logging purposes
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             losses_reduced_scaled = sum(loss_dict_reduced.values())
             loss_value = losses_reduced_scaled.item()
@@ -516,7 +581,7 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
             optimizer.step()
 
             metric_logger.update(training_loss=loss_value, **loss_dict_reduced)
-            
+
         print("Finished epoch:      ", epoch)
         metric_logger.synchronize_between_processes()
         print("Averaged stats:", metric_logger)
@@ -528,18 +593,35 @@ def train(args, sam,optimizer, train_dataloaders, valid_dataloaders, lr_schedule
         
         lr_scheduler.step()
         dist.barrier()
-        test_stats = evaluate(args, sam, valid_dataloaders)
+        test_stats = evaluate(args, net, sam, valid_dataloaders)
         train_stats.update(test_stats)
         
+        net.train()  
 
         if epoch % args.model_save_fre == 0:
             model_name = "/epoch_"+str(epoch)+".pth"
             print('come here save at', args.output + model_name)
-            misc.save_on_master(sam.module.state_dict(), args.output + model_name)
+            misc.save_on_master(net.module.state_dict(), args.output + model_name)
     
     # Finish training
     print("Training Reaches The Maximum Epoch Number")
+    
+    # merge sam and tune_decoder
+    if misc.is_main_process():        
+        sam_checkpoint_map = {
+        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+        }
+        sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
 
+        hq_decoder = torch.load(args.output + model_name)
+        for key in hq_decoder.keys():
+            if 'mask_token' in key or 'iou_token' in key:
+                sam_key = 'mask_decoder.'+key
+                sam_ckpt[sam_key] = hq_decoder[key]
+        model_name = "/asam_epoch_"+str(epoch)+".pth"
+        torch.save(sam_ckpt, args.output + model_name)
 
 @torch.no_grad()
 def compute_iou(preds, target):
@@ -572,8 +654,8 @@ def compute_boundary_iou(preds, target):
     return iou / len(preds), iou_list
 
 @torch.no_grad()
-def evaluate(args,  sam, valid_dataloaders, visualize=False):
-    sam.eval()
+def evaluate(args, net, sam, valid_dataloaders, visualize=False):
+    net.eval()
     print("Validating...")
     test_stats = {}
     dataset_id = -1
@@ -584,11 +666,16 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
+        
         for data_val in metric_logger.log_every(valid_dataloader,10):
+            
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
+            # labels_val_np = labels_val[0,0,...].cpu().data.numpy()
+            # cv2.imwrite("tmp.png",labels_val_np*255.0)
+            # raise NameError
             if n == 0:
                 bad_examples += 1
                 loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
@@ -605,38 +692,57 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
             
             if args.prompt_type=='box': 
                 labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
-                input_points = labels_box.reshape(K,N,2,2)
-                input_labels = torch.concat([torch.full((K,N,1),2), torch.full((K,N,1),3)] ,-1).cuda()
             if args.prompt_type=='point':        
                 try:
-                    labels_points = misc.masks_sample_points(labels_val) #[K*N 10 2]
-                    point_num = labels_points.shape[-2]
-                    input_points = labels_points.view(K,N,point_num,2)
-                    input_labels = torch.ones(K,N,point_num)
+                    labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
                 except:
                     bad_examples+=1
                     loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
                     loss_dict_reduced = misc.reduce_dict(loss_dict)
                     metric_logger.update(**loss_dict_reduced)
                     continue
+                    
+            batched_input = []
+            dict_input = dict()
             
-            with torch.no_grad():
-                predicted_logits, predicted_iou = sam(
-                    inputs_val/255.0,
-                    input_points,
-                    input_labels,
-                )
-            sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
-            predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
-            predicted_logits = torch.take_along_dim(
-                predicted_logits, sorted_ids[..., None, None], dim=2
-            )
-            print(torch.min(predicted_logits), torch.max(predicted_logits))
-            masks = predicted_logits[:,:,0,...]
+            input_image = torch.as_tensor(imgs[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
+            dict_input['image'] = input_image 
+            if args.prompt_type == 'box':
+                dict_input['boxes'] = labels_box #N 4
+            elif args.prompt_type == 'point': 
+                point_coords = labels_points #[N 10 2]
+                #print(point_coords.shape)
+                dict_input['point_coords'] = point_coords
+                dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
+            elif args.prompt_type == 'noise_mask':
+                dict_input['mask_inputs'] = labels_noisemask[b_i:b_i+1]
+            else:
+                raise NotImplementedError
+            
+            dict_input['original_size'] = imgs[0].shape[:2]
+            batched_input.append(dict_input)
+            
+            with torch.no_grad():            
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
 
-            # cv2.imwrite("demo.png", (masks.squeeze().cpu().data.numpy()>0)*255.0 )
-            # print(masks.shape, labels_ori.shape)
-            # raise NameError
+            batch_len = len(batched_output)
+            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
+            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
+            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
+            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+            
+            if args.baseline:
+                masks = batched_output[0]['low_res_logits'].to(torch.float32)
+            else:
+                masks = net(
+                    image_embeddings=encoder_embedding,
+                    image_pe=image_pe,
+                    sparse_prompt_embeddings=sparse_embeddings,
+                    dense_prompt_embeddings=dense_embeddings,
+                    multimask_output=False,
+                )
+                masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
+            #print(masks.shape,labels_ori.shape)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -656,7 +762,11 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
                 continue    
         
             
-            save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
+            if args.prompt_type =='box':
+                save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
+            else:
+                save_dir = os.path.join(args.output, args.prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
+            
             Path(save_dir).mkdir(parents=True,exist_ok=True)
             base = ori_im_path[0].split('/')[-1].split('.')[0]
             save_base = os.path.join(save_dir, str(base))
@@ -673,13 +783,15 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
             loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
-
+        
+        
         print('============================')
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
+        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') )
         
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
@@ -692,13 +804,9 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
 
 if __name__ == "__main__":
 
-    ## Train dataset
-    dataset_sa000000efficient = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+    ### --------------- Configuring the Train and Valid datasets ---------------
     
+    ## Train dataset
     dataset_sa000000 = {"name": "sam_subset",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
@@ -711,10 +819,10 @@ if __name__ == "__main__":
         "im_ext": ".png",
         "gt_ext": ""}
     
-    dataset_sa000000_512 = {"name": "sam_subset",
-        "im_dir": "../sam-1b/sa_000000/512",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".jpg",
+    dataset_sa000138_dci = {"name": "sam_subset",
+        "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".png",
         "gt_ext": ""}
     
     dataset_sa000000adv = {"name": "sam_subset",
@@ -795,6 +903,7 @@ if __name__ == "__main__":
         "gt_dir": "data/HRSOD-TE/gts",
         "im_ext": ".jpg",
         "gt_ext": ".png"}
+
     
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
         "im_dir": "data/ADE20K_2016_07_26/images/validation",
@@ -828,10 +937,17 @@ if __name__ == "__main__":
     }
     
     dataset_ishape_antenna = {"name": "ishape",
-        "im_dir": "data/ishape/antenna/val/image",
-        "gt_dir": "data/ishape/antenna/val/instance_map",
+        "im_dir": "data/ishape_dataset/antenna/val/image",
+        "gt_dir": "data/ishape_dataset/antenna/val/instance_map",
         "im_ext": ".jpg",
         "gt_ext": ".png"
+    }
+    
+    dataset_ppdls = {"name": "ppdls",
+        "im_dir": "data/Plant_Phenotyping",
+        "gt_dir": "data/Plant_Phenotyping",
+        "im_ext": "_rgb.png",
+        "gt_ext": "_label.png"
     }
     
     
@@ -855,7 +971,8 @@ if __name__ == "__main__":
             "im_ext": ".jpg",
             "gt_ext": ".png"
     }
-            
+    
+    
     dataset_ImagenetPart = {"name": "ImagenetPart",
         "im_dir": "data/PartImageNet/images/test",
         "gt_dir": "data/PartImageNet/annotations/test",
@@ -875,14 +992,7 @@ if __name__ == "__main__":
         "im_ext": "_rgb.png",
         "gt_ext": "_label.png"
     }
-    
-    dataset_gtea_train = {"name": "gtea",
-        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
-        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
-        "im_ext": ".jpg",
-        "gt_ext": ".png"
-    }
-    
+     
     dataset_streets = {"name": "streets",
         "im_dir": "data/Streets/images",
         "gt_dir": "data/Streets/labels",
@@ -910,11 +1020,24 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf/images",
-        "im_dir": "data/plittersdorf/images",
-        "annotation_file": "data/plittersdorf/test.json",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
         "im_ext": ".jpg",
     }
+    
+    dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_ext": ".jpg",
+    }
+    
+    dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
+        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
+        "annotation_file": "data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_ext": ".jpg",
+    }
+    
         
     dataset_egohos = {"name": "egohos",
         "im_dir": "data/egohos/val/image",
@@ -949,15 +1072,16 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_ABOVE = {"name": "NDD20_coco",
+    dataset_NDD20_ABOVE = {"name": "NDD20",
         "im_dir": "data/NDD20/ABOVE",
-        "annotation_file": "data/NDD20/ABOVE_LABELS.json",
+        "gt_dir": "data/NDD20/ABOVE_LABELS",
         "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
-
+    
     dataset_NDD20_BELOW = {"name": "NDD20_coco",
         "im_dir": "data/NDD20/BELOW",
-        "annotation_file": "data/NDD20/BELOW_LABELS.json",
+        "annotation_file": "/data/tanglv/xhk/ASAM/2023-9-7/Ad-Sam-Main/sam_continue_learning/data/COCO2017-val/instances_val2017.json",
         "im_ext": ".jpg",
     }   
         
@@ -974,8 +1098,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/ZeroWaste/train/data",
-        "gt_dir": "data/ZeroWaste/train/sem_seg",
+        "im_dir": "data/splits_final_deblurred/train/data",
+        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
@@ -987,10 +1111,11 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_ovis_test = {"name": "ovis_coco",
-            "im_dir": "data/OVIS/test",
-            "annotation_file": "data/OVIS/annotations_test.json",
-            "im_ext": ".jpg"
+    dataset_ovis_train = {"name": "ovis",
+        "im_dir": "data/OVIS/train_img",
+        "gt_dir": "data/OVIS/train_labels",
+        "im_ext": ".jpg",
+        "gt_ext": ""
     }
     
     dataset_ibd_val = {"name": "ibd",
@@ -1014,6 +1139,13 @@ if __name__ == "__main__":
         "gt_ext": ".json"
     }
     
+    dataset_gtea_train = {"name": "gtea",
+        "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
+        "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
+    }
+    
     # medical dataset
     dataset_Kvasir_SEG = {"name": "Kvasir_SEG",
         "im_dir": "data/Kvasir-SEG/images",
@@ -1023,8 +1155,8 @@ if __name__ == "__main__":
     }
     
     dataset_Kvasir_sessile = {"name": "Kvasir_sessile",
-        "im_dir": "data/Kvasir-sessile/images",
-        "gt_dir": "data/Kvasir-sessile/masks",
+        "im_dir": "data/sessile-main-Kvasir-SEG/images",
+        "gt_dir": "data/sessile-main-Kvasir-SEG/masks",
         "im_ext": ".jpg",
         "gt_ext": ".jpg"
     }
@@ -1035,7 +1167,6 @@ if __name__ == "__main__":
         "gt_ext": ".tif"
     }
     
-    
     args = get_args_parser()
     if not args.eval:
         args.output = os.path.join('work_dirs', args.output_prefix+'-')
@@ -1044,14 +1175,19 @@ if __name__ == "__main__":
             args.output += '-'
         args.output += str(args.train_img_num) + '-' + args.model_type
     elif args.restore_model:
-        args.output = os.path.join('work_dirs', *args.restore_model.split('/')[1:-1])
-    else: args.output = 'work_dirs/demo'
-    
-    # print(args.output)
-    # raise NameError
-
+        args.output = os.path.join(*args.restore_model.split('/')[:-1])
     
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
     valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]
+    
+    for train_dataset in train_datasets:
+        train_dataset['im_dir'] = os.path.join(args.load_prefix, train_dataset['im_dir'])
+        if 'gt_dir' in train_dataset: train_dataset['gt_dir'] = os.path.join(args.load_prefix, train_dataset['gt_dir'])
+        if 'annotation_file' in train_dataset: train_dataset['annotation_file'] = os.path.join(args.load_prefix, train_dataset['annotation_file'])
+        
+    for test_dataset in valid_datasets:
+        test_dataset['im_dir'] = os.path.join(args.load_prefix, test_dataset['im_dir'])
+        if 'gt_dir' in test_dataset: test_dataset['gt_dir'] = os.path.join(args.load_prefix, test_dataset['gt_dir'])
+        if 'annotation_file' in test_dataset: test_dataset['annotation_file'] = os.path.join(args.load_prefix, test_dataset['annotation_file'])
     
     main(train_datasets, valid_datasets, args)
