@@ -1104,9 +1104,9 @@ if __name__ == "__main__":
     if not args.eval:
         args.output = os.path.join('work_dirs', args.output_prefix+'-')
         for train_dataset in args.train_datasets:
-            args.ouput += train_dataset.replace('dataset_','')
-            args.ouput += '-'
-        args.outpu += str(args.train_img_num) + args.model_type
+            args.output += train_dataset.replace('dataset_','')
+            args.output += '-'
+        args.output += str(args.train_img_num) + '-' + args.model_type
         
     elif args.baseline: 
         if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)

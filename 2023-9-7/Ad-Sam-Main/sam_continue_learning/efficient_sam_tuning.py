@@ -20,6 +20,8 @@ from utils.loss_mask import loss_masks
 import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR, StepLR
 from pathlib import Path
+from efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
+
 
 def lr_lambda(epoch):
     if epoch < args.warmup_epoch:
@@ -376,7 +378,7 @@ def main(train_datasets, valid_datasets, args):
     print(len(valid_dataloaders), " valid dataloaders created")
     
     ### --- Step 2: Model for DistributedDataParallel---
-    net = MaskDecoder_Tuning(args.model_type) 
+    net = build_efficient_sam_vitt()
     if args.compile: net = torch.compile(net)
     if torch.cuda.is_available():
         net.cuda()
@@ -397,24 +399,7 @@ def main(train_datasets, valid_datasets, args):
     print("parameters_grad Number:", parameters_grad)
     print("parameters_no_grad Number:", parameters_no_grad)
     
-    
-    sam_checkpoint_map = {
-        'vit_b': os.path.join(args.load_prefix,'pretrained_checkpoint/sam_vit_b_01ec64.pth'),
-        'vit_l': 'pretrained_checkpoint/sam_vit_l_0b3195.pth',
-        'vit_h': 'pretrained_checkpoint/sam_vit_h_4b8939.pth',
-    }
-    sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
-    if args.compile: sam = torch.compile(sam)
-    _ = sam.to(device=args.device)
-    sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-    if args.restore_sam_model:
-        print("restore sam model from:", args.restore_sam_model)
-        if torch.cuda.is_available():
-            sam.module.load_state_dict(torch.load(args.restore_sam_model))
-        else:
-            sam.module.load_state_dict(torch.load(args.restore_sam_model,map_location="cpu"))
-    
-    
+        
     ### --- Step 3: Train or Evaluate ---    
     if not args.eval:
         print("--- define optimizer ---")
@@ -426,12 +411,12 @@ def main(train_datasets, valid_datasets, args):
             print("slow start & fast decay")
             lr_scheduler = LambdaLR(optimizer, lr_lambda)
 
-        train(args, net, sam, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
+        train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     else:
-        evaluate(args, net, sam, valid_dataloaders, args.visualize)
+        evaluate(args, net, valid_dataloaders, args.visualize)
 
 
-def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
+def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
     epoch_start = args.start_epoch
     epoch_num = args.max_epoch_num
 
@@ -455,11 +440,7 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
             imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
             
             # input prompt
-<<<<<<< HEAD
             input_keys = ['box', 'point']
-=======
-            input_keys = ['box','point','noise_mask']
->>>>>>> 9d34c38d4e24265161f905b80814d013f476b0f1
             labels_box = misc.masks_to_boxes(labels) #[K*N 4]
             try:
                 labels_points = misc.masks_sample_points(labels) #[K*N 10 2]
@@ -467,7 +448,6 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
                 # less than 10 points
                 input_keys = ['box']
             labels_256 = F.interpolate(labels.unsqueeze(1), size=(256, 256), mode='bilinear')
-<<<<<<< HEAD
             
             input_type = random.choice(input_keys)
 
@@ -480,7 +460,7 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
                 input_points = labels_points.view(K,N,point_num,2)
                 input_labels = torch.ones(K,N,point_num)
             
-            predicted_logits, predicted_iou = sam(
+            predicted_logits, predicted_iou = net(
                 inputs/255.0,
                 input_points,
                 input_labels,
@@ -518,58 +498,6 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
             # loss = loss_dice
             loss_dict = {"loss_mask": loss_mask*0.2, "loss_dice":loss_dice}
 
-            # if loss_dice.item() > 0.5:
-            #     cv2.imwrite("demo_gt.png", labels[0].cpu().data.numpy())
-            #     cv2.imwrite("demo.png", (masks[0].squeeze().cpu().data.numpy()>0.5)*255.0 )
-            #     print(masks.shape,labels.unsqueeze(1).shape)
-=======
-            labels_noisemask = misc.masks_noise(labels_256) #[K*N 1 256 256]
-
-            batched_input = []
-            
-            for bi in range(len(imgs)):
-                dict_input = dict()
-                input_image = torch.as_tensor(imgs[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
-                dict_input['image'] = input_image 
-
-                input_type = random.choice(input_keys)
-                sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
-                if input_type == 'box':
-                    dict_input['boxes'] = labels_box[sparse_slice,...]  #N*4
-                elif input_type == 'point':
-                    point_coords = labels_points[sparse_slice,...] # N 10 2
-                    dict_input['point_coords'] = point_coords
-                    dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
-                elif input_type == 'noise_mask':
-                    dict_input['mask_inputs'] = labels_noisemask[dense_slice] # N 1 256 256
-
-                else:
-                    raise NotImplementedError
-
-                dict_input['original_size'] = imgs[0].shape[:2]
->>>>>>> 9d34c38d4e24265161f905b80814d013f476b0f1
-                
-                batched_input.append(dict_input)
-            with torch.no_grad():
-                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
-            
-            batch_len = len(batched_output)
-            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
-
-            masks = net(
-                image_embeddings=encoder_embedding,
-                image_pe=image_pe,
-                sparse_prompt_embeddings=sparse_embeddings,
-                dense_prompt_embeddings=dense_embeddings,
-                multimask_output=False
-            )
-            loss_mask, loss_dice = loss_masks(masks, labels.unsqueeze(1)/255.0, len(masks))
-            loss = loss_mask + loss_dice
-            
-            loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
 
             # reduce losses over all GPUs for logging purposes
             loss_dict_reduced = misc.reduce_dict(loss_dict)
@@ -606,22 +534,6 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     # Finish training
     print("Training Reaches The Maximum Epoch Number")
     
-    # merge sam and tune_decoder
-    if misc.is_main_process():        
-        sam_checkpoint_map = {
-        'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
-        }
-        sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
-
-        hq_decoder = torch.load(args.output + model_name)
-        for key in hq_decoder.keys():
-            if 'mask_token' in key or 'iou_token' in key:
-                sam_key = 'mask_decoder.'+key
-                sam_ckpt[sam_key] = hq_decoder[key]
-        model_name = "/asam_epoch_"+str(epoch)+".pth"
-        torch.save(sam_ckpt, args.output + model_name)
 
 @torch.no_grad()
 def compute_iou(preds, target):
@@ -654,7 +566,7 @@ def compute_boundary_iou(preds, target):
     return iou / len(preds), iou_list
 
 @torch.no_grad()
-def evaluate(args, net, sam, valid_dataloaders, visualize=False):
+def evaluate(args, net, valid_dataloaders, visualize=False):
     net.eval()
     print("Validating...")
     test_stats = {}
@@ -668,7 +580,8 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
         
         for data_val in metric_logger.log_every(valid_dataloader,10):
-            
+                        
+
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
@@ -690,59 +603,31 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
             
-            if args.prompt_type=='box': 
-                labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
-            if args.prompt_type=='point':        
-                try:
-                    labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
-                except:
-                    bad_examples+=1
-                    loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
-                    loss_dict_reduced = misc.reduce_dict(loss_dict)
-                    metric_logger.update(**loss_dict_reduced)
-                    continue
-                    
-            batched_input = []
-            dict_input = dict()
-            
-            input_image = torch.as_tensor(imgs[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
-            dict_input['image'] = input_image 
-            if args.prompt_type == 'box':
-                dict_input['boxes'] = labels_box #N 4
-            elif args.prompt_type == 'point': 
-                point_coords = labels_points #[N 10 2]
-                #print(point_coords.shape)
-                dict_input['point_coords'] = point_coords
-                dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
-            elif args.prompt_type == 'noise_mask':
-                dict_input['mask_inputs'] = labels_noisemask[b_i:b_i+1]
-            else:
-                raise NotImplementedError
-            
-            dict_input['original_size'] = imgs[0].shape[:2]
-            batched_input.append(dict_input)
-            
-            with torch.no_grad():            
-                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
 
-            batch_len = len(batched_output)
-            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+            if args.prompt_type == 'box':
+                labels_box = misc.masks_to_boxes(labels_val) #[K*N 4]
+                input_points = labels_box.reshape(K,N,2,2)
+                input_labels = torch.concat([torch.full((K,N,1),2), torch.full((K,N,1),3)] ,-1).cuda()
+    
+            elif args.prompt_type == 'point':
+                labels_points = misc.masks_sample_points(labels_val) #[K*N 10 2]
+                point_num = labels_points.shape[-2]
+                input_points = labels_points.view(K,N,point_num,2)
+                input_labels = torch.ones(K,N,point_num)
             
-            if args.baseline:
-                masks = batched_output[0]['low_res_logits'].to(torch.float32)
-            else:
-                masks = net(
-                    image_embeddings=encoder_embedding,
-                    image_pe=image_pe,
-                    sparse_prompt_embeddings=sparse_embeddings,
-                    dense_prompt_embeddings=dense_embeddings,
-                    multimask_output=False,
-                )
-                masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-            #print(masks.shape,labels_ori.shape)
+            predicted_logits, predicted_iou = net(
+                inputs_val/255.0,
+                input_points,
+                input_labels,
+            )
+            
+            sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
+            predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
+            predicted_logits = torch.take_along_dim(
+                predicted_logits, sorted_ids[..., None, None], dim=2
+            )
+
+            masks = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -816,6 +701,12 @@ if __name__ == "__main__":
     dataset_sa000138_dci = {"name": "sam_subset",
         "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".png",
+        "gt_ext": ""}
+    
+    dataset_sa000000efficient = {"name": "sam_subset",
+        "im_dir": "../output/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
         "gt_ext": ""}
     
