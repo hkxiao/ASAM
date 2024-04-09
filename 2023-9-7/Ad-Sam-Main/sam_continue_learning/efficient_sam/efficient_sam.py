@@ -186,6 +186,7 @@ class EfficientSam(nn.Module):
         batched_points: torch.Tensor,
         batched_point_labels: torch.Tensor,
         scale_to_original_image_size: bool = True,
+        multimask_output=True,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Predicts masks end-to-end from provided images and prompts.
@@ -208,7 +209,7 @@ class EfficientSam(nn.Module):
             image_embeddings,
             batched_points,
             batched_point_labels,
-            multimask_output=True,
+            multimask_output=multimask_output,
             input_h=input_h,
             input_w=input_w,
             output_h=input_h if scale_to_original_image_size else -1,

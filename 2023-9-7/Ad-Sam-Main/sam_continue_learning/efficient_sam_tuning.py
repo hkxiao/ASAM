@@ -301,7 +301,9 @@ def get_args_parser():
     parser.add_argument('--warmup_epoch', default=5, type=int)
     parser.add_argument('--gamma', default=0.5, type=float)
     parser.add_argument('--slow_start', action='store_true')
-    
+    parser.add_argument('--alpha', default=1.0, type=float)
+    parser.add_argument('--beta', default=1.0, type=float)
+
     # Input Setting
     parser.add_argument('--input_size', default=[1024,1024], type=list)
     parser.add_argument('--batch_size_train', default=1, type=int)
@@ -464,6 +466,7 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 inputs/255.0,
                 input_points,
                 input_labels,
+                multimask_output=True
             )
             
             sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
@@ -475,15 +478,6 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
             masks_0 = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
             masks_1 = predicted_logits[:,:,1,...].view(K*N,1,1024,1024)
             masks_2 = predicted_logits[:,:,2,...].view(K*N,1,1024,1024)
-
-            # print(torch.max(masks),torch.min(masks),labels.shape, masks.shape)
-            # raise NameError
-            # print(torch.max(masks),labels.shape, masks.shape)
-            # # raise NameError
-            # cv2.imwrite("demo_gt.png", labels[2].cpu().data.numpy())
-            # cv2.imwrite("demo.png", (masks[2].squeeze().cpu().data.numpy()>0.5)*255.0)
-            # print(masks.shape,labels.unsqueeze(1).shape)
-            # raise NameError
             
             # masks = F.interpolate(masks,(256,256),mode='bilinear',align_corners=False)
             loss_mask_0, loss_dice_0 = loss_masks(masks_0, labels.unsqueeze(1)/255.0, len(masks_0))
@@ -493,11 +487,10 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
             loss_mask = loss_mask_0 + loss_mask_1 + loss_mask_2
             loss_dice = loss_dice_0 + loss_dice_1 + loss_dice_2
             #print(labels.shape)
-            loss = loss_dice
+            loss =  loss_mask*args.alpha + loss_dice*args.beta
             #loss = loss_mask
             # loss = loss_dice
-            loss_dict = {"loss_mask": loss_mask*0.2, "loss_dice":loss_dice}
-
+            loss_dict = {"loss_mask": loss_mask*args.alpha, "loss_dice":loss_dice*args.beta}
 
             # reduce losses over all GPUs for logging purposes
             loss_dict_reduced = misc.reduce_dict(loss_dict)
@@ -619,6 +612,7 @@ def evaluate(args, net, valid_dataloaders, visualize=False):
                 inputs_val/255.0,
                 input_points,
                 input_labels,
+                multimask_output=True
             )
             
             sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
@@ -705,7 +699,7 @@ if __name__ == "__main__":
         "gt_ext": ""}
     
     dataset_sa000000efficient = {"name": "sam_subset",
-        "im_dir": "../output/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
         "gt_ext": ""}
@@ -1065,6 +1059,7 @@ if __name__ == "__main__":
             args.output += train_dataset.replace('dataset_','')
             args.output += '-'
         args.output += str(args.train_img_num) + '-' + args.model_type
+        args.output += '-' + str(args.alpha) + '-' + str(args.beta)
     elif args.restore_model:
         args.output = os.path.join(*args.restore_model.split('/')[:-1])
     
