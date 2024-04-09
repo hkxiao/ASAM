@@ -1065,7 +1065,7 @@ if __name__ == "__main__":
             args.output += train_dataset.replace('dataset_','')
             args.output += '-'
         args.output += str(args.train_img_num) + '-' + args.model_type
-        args.output += '-' + str(args.alpha) + '-' + str(args.beta)
+        args.output += '-' + str(args.alpha) + '-' + str(args.beta) + '-' + str(args.learning_rate) + '-' + str(args.warmup_epoch) + '-' + str(args.max_epoch_num)
     elif args.restore_model:
         args.output = os.path.join(*args.restore_model.split('/')[:-1])
     else:
