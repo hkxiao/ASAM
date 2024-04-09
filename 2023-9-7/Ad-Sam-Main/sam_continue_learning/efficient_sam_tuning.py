@@ -380,7 +380,7 @@ def main(train_datasets, valid_datasets, args):
     print(len(valid_dataloaders), " valid dataloaders created")
     
     ### --- Step 2: Model for DistributedDataParallel---
-    net = build_efficient_sam_vitt()
+    net = build_efficient_sam_vitt(checkpoint="pretrained_checkpoint/efficient_sam_vitt.pt",)
     if args.compile: net = torch.compile(net)
     if torch.cuda.is_available():
         net.cuda()
@@ -390,9 +390,15 @@ def main(train_datasets, valid_datasets, args):
     if args.restore_model:
         print("restore model from:", args.restore_model)
         if torch.cuda.is_available():
-            net_without_ddp.load_state_dict(torch.load(args.restore_model))
+            try:
+                net_without_ddp.load_state_dict(torch.load(args.restore_model))
+            except:
+                net_without_ddp.load_state_dict(torch.load(args.restore_model)['model'])                
         else:
-            net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
+            try:
+                net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
+            except:
+                net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu")['model'])                
 
     parameters_grad, parameters_no_grad = 0, 0
     for n,p in net_without_ddp.named_parameters():
@@ -514,7 +520,7 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         
         lr_scheduler.step()
         dist.barrier()
-        test_stats = evaluate(args, net, sam, valid_dataloaders)
+        test_stats = evaluate(args, net, valid_dataloaders)
         train_stats.update(test_stats)
         
         net.train()  
@@ -1062,6 +1068,8 @@ if __name__ == "__main__":
         args.output += '-' + str(args.alpha) + '-' + str(args.beta)
     elif args.restore_model:
         args.output = os.path.join(*args.restore_model.split('/')[:-1])
+    else:
+        args.output = 'work_dirs/tmp'
     
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
     valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]
