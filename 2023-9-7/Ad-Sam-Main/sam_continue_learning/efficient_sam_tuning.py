@@ -21,7 +21,7 @@ import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR, StepLR
 from pathlib import Path
 from efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
-
+from utils.misc import get_logger
 
 def lr_lambda(epoch):
     if epoch < args.warmup_epoch:
@@ -238,7 +238,7 @@ def record_iou(filename, ious, boundary_ious):
     for i, (iou, biou) in enumerate(zip(ious, boundary_ious)):
         with open(filename+'_'+str(i)+'.txt','w') as f:
             f.write(str(round(iou.item()*100,2)))
-        
+    
 def show_points(coords, labels, ax, marker_size=175):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
@@ -338,13 +338,10 @@ def main(train_datasets, valid_datasets, args):
     print('rank: {}'.format(args.rank))
     print('local_rank: {}'.format(args.local_rank))
     print("args: " + str(args) + '\n')
-
-    if misc.is_main_process():
-        os.makedirs(args.output, exist_ok=True)
-        with open(args.output+'/log.txt','a') as f:
-            f.write('\n\n\n=========>> '+str(datetime.now())+'\n')
-            f.write(str(args)+'\n')
-            
+    
+    logger.info('\n\n\n=========>> '+str(datetime.now())+'\n')
+    logger.info(str(args)+'\n')
+    
     seed = args.seed + misc.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -444,7 +441,7 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         metric_logger = misc.MetricLogger(delimiter="  ")
         train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
     
-        for data in metric_logger.log_every(train_dataloaders,10):
+        for data in metric_logger.log_every(train_dataloaders,100,logger=logger):
             
             inputs, labels = data['image'], data['label']  # [K 3 1024 1024]   [K N 1024 1024]
             K, N, H, W =labels.shape
@@ -522,8 +519,8 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
 
         if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
+            logger.info(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
+                    
         
         lr_scheduler.step()
         dist.barrier()
@@ -585,9 +582,7 @@ def evaluate(args, net, valid_dataloaders, visualize=False):
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
         
-        for data_val in metric_logger.log_every(valid_dataloader,10):
-                        
-
+        for data_val in metric_logger.log_every(valid_dataloader,100,logger=logger):
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
@@ -687,9 +682,8 @@ def evaluate(args, net, valid_dataloaders, visualize=False):
         
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
-                f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
+            logger.info(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
+            logger.info(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
 
     return test_stats
 
@@ -1073,10 +1067,13 @@ if __name__ == "__main__":
             args.output += '-'
         args.output += str(args.train_img_num) + '-' + args.model_type
         args.output += '-' + str(args.alpha) + '-' + str(args.beta) + '-' + str(args.learning_rate) + '-' + str(args.warmup_epoch) + '-' + str(args.max_epoch_num)
+    elif 'pretrained_checkpoint' in args.restore_model:
+        args.output = os.path.join('work_dirs',args.output_prefix)
     elif args.restore_model:
-        args.output = os.path.join(*args.restore_model.split('/')[:-1])
-    else:
-        args.output = 'work_dirs/tmp'
+        args.output = os.path.join('work_dirs',*args.restore_model.split('/')[1:-1])
+    
+    Path(args.output).mkdir(parents=True,exist_ok=True)
+    logger = get_logger(filename = os.path.join(args.output,'log.txt'))
     
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
     valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]

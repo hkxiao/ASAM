@@ -78,7 +78,7 @@ class COCODataset(Dataset):
             
         gt = torch.tensor(np.stack(gt)).to(torch.float32) * 255.0
 
-        print(gt.shape)
+        #print(gt.shape)
         sample = {
             "imidx": torch.from_numpy(np.array(idx)),  
             "image": im,   # 3 H W
