@@ -386,7 +386,7 @@ def main(train_datasets, valid_datasets, args):
         net.cuda()
     net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
     net_without_ddp = net.module
-    
+            
     if args.restore_model:
         print("restore model from:", args.restore_model)
         if torch.cuda.is_available():
@@ -399,6 +399,12 @@ def main(train_datasets, valid_datasets, args):
                 net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
             except:
                 net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu")['model'])                
+
+    for n,p in net.named_parameters():
+        if 'mask_tokens' not in n and 'iou_token' not in n:
+            p.requires_grad = False
+        else :
+            print(p.shape)
 
     parameters_grad, parameters_no_grad = 0, 0
     for n,p in net_without_ddp.named_parameters():
@@ -425,6 +431,7 @@ def main(train_datasets, valid_datasets, args):
 
 
 def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
+#    test_stats = evaluate(args, net, valid_dataloaders)
     epoch_start = args.start_epoch
     epoch_num = args.max_epoch_num
 
