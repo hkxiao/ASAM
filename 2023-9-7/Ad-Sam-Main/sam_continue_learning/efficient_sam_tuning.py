@@ -912,23 +912,24 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
+        "im_dir": "data/Plittersdorf/images",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/test.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/train.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/val.json",
         "im_ext": ".jpg",
     }
+    
     
         
     dataset_egohos = {"name": "egohos",
