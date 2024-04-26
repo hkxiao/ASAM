@@ -29,26 +29,28 @@ CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --be
 ############## Initialize #####################
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
-# sam setting
+# Definder setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
-parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
 
-# SD setting
+# Attacker setting
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
 parser.add_argument('--guess_mode', action='store_true')   
 parser.add_argument('--guidance_scale', default=7.5, type=float, help='random seed') 
 parser.add_argument('--random_latent', action='store_true')
 
-# grad setting
+# Perturbation setting
 parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
-parser.add_argument('--gamma', type=float, default=100, help='cnn')
-parser.add_argument('--kappa', type=float, default=100, help='cnn')
-parser.add_argument('--beta', type=float, default=1, help='cnn')
 parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
-parser.add_argument('--norm', type=int, default=2, help='cnn')
 parser.add_argument('--mu', default=0.5, type=float, help='random seed')
+
+# Loss setting
+parser.add_argument('--gamma', type=float, default=100, help='bce loss weight')
+parser.add_argument('--kappa', type=float, default=100, help='dice loss weight')
+parser.add_argument('--beta', type=float, default=1, help='cnn')
+parser.add_argument('--norm', type=int, default=2, help='cnn')
+parser.add_argument('--eta', type=float, default=100.0, help='cnn')
 
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
@@ -59,13 +61,18 @@ parser.add_argument('--check_inversion', action='store_true')
 parser.add_argument('--debug', action='store_true')
 
 # path setting
-parser.add_argument('--prefix', type=str, default='skip-ablation-01-mi', help='cnn')
-parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--prefix', type=str, default='', help='cnn')
+parser.add_argument('--data_root', default='sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   
-parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
+parser.add_argument('--control_mask_dir', default='sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--inversion_dir', default='output/sa_000000-Inversion/embeddings', type=str, help='random seed')   
-parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
+parser.add_argument('--caption_path', default='sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
 parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')    
+
+# prompt setting 
+parser.add_argument('--prompt_bs', type=int, default=150, help='cnn')
+parser.add_argument('--prompt_type', type=str, default='box', help='cnn')
+parser.add_argument('--prompt_num', type=int, default=10, help='cnn')
 
 args = parser.parse_args()
 print(args)
@@ -157,6 +164,37 @@ def masks_to_boxes(masks):
     y_min = y_mask.masked_fill(~(masks>128), 1e8).flatten(1).min(-1)[0]
 
     return torch.stack([x_min, y_min, x_max, y_max], 1)
+
+def masks_sample_points(masks,k=10):
+    """Sample points on mask
+    """
+    if masks.numel() == 0:
+        return torch.zeros((0, 2), device=masks.device)
+    
+    h, w = masks.shape[-2:]
+
+    y = torch.arange(0, h, dtype=torch.float)
+    x = torch.arange(0, w, dtype=torch.float)
+    y, x = torch.meshgrid(y, x)
+    y = y.to(masks)
+    x = x.to(masks)
+
+    # k = 10
+    samples = []
+    for b_i in range(len(masks)):
+        select_mask = (masks[b_i]>128)
+        x_idx = torch.masked_select(x,select_mask)
+        y_idx = torch.masked_select(y,select_mask)
+        
+        perm = torch.randperm(x_idx.size(0))
+        idx = perm[:k]
+        samples_x = x_idx[idx]
+        samples_y = y_idx[idx]
+        samples_xy = torch.cat((samples_x[:,None],samples_y[:,None]),dim=1)
+        samples.append(samples_xy)
+
+    samples = torch.stack(samples)
+    return samples
 
 def dice_loss(
         inputs: torch.Tensor,
@@ -623,15 +661,10 @@ def text2image_ldm_stable_last(
     else:
         uncond_embeddings_ = None
 
-    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)
-    #print("Latent", latent.shape, "Latents", latents.shape) # [1 4 64 64]
-
-    model.scheduler.set_timesteps(num_inference_steps)
-
+    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)    model.scheduler.set_timesteps(num_inference_steps)
     best_latent = latents
     ori_latents = latents.clone().detach()
     adv_latents = latents.clone().detach()
-    #print(latents.max(), latents.min())
     momentum = 0
     worst_iou = 1.0
     worst_mask = None
@@ -657,27 +690,23 @@ def text2image_ldm_stable_last(
             image_m = F.interpolate(image, image_size)
             #print(1, image_m.max(), image_m.min())
 
-            #net_predictor.set_torch_image(image_m*255.0,original_image_size=(1024,1024))
-            #ad_masks, ad_iou_predictions, ad_low_res_logits = net_predictor.predict_torch(point_coords=None,point_labels=None, boxes=boxes, multimask_output=False)
             if args.model == 'sam':
                 example = {}
                 example['image'] = image_m[0]*255.0
-                example['boxes'] = boxes
+                if args.prompt_type == 'box': example['boxes'] = boxes
+                else: example['points'] = points
+                
                 example['original_size'] = image_size
                 output, interbeddings = net([example], multimask_output=False)
                 output = output[0]
-                print(type(output))
                 
                 print(example['image'].dtype, example['boxes'].dtype)
-                #raise NameError
                 ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
+                
             elif args.model == 'sam_efficient':
-
                 input_points = boxes.reshape(1,-1,2,2)
                 input_labels = torch.concat([torch.full((1,boxes.shape[0],1),2), torch.full((1,boxes.shape[0],1),3)] ,-1).cuda()
-                # print(input_labels, input_labels.shape)
-                # print(image_m.shape,torch.max(image_m))
-                # raise NameError         
+          
                 predicted_logits, predicted_iou = net(
                     image_m,
                     input_points,
@@ -685,26 +714,11 @@ def text2image_ldm_stable_last(
                 )
                 sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
                 predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
-                print(predicted_logits.shape)
                 predicted_logits = torch.take_along_dim(
                     predicted_logits, sorted_ids[..., None, None], dim=2
                 )
-                # print(predicted_logits.shape)
                 ad_low_res_logits = F.interpolate(predicted_logits[0,:,:1,:,:],(256,256),mode='bilinear',align_corners=False)
                 ad_masks = torch.ge(ad_low_res_logits,0)
-                # print(ad_low_res_logits.shape)
-                # raise NameError
-                
-                ## debug efficient sam
-                # for i in range(ad_masks.shape[0]):
-                #     vis_mask = ad_masks[i,0,...].to(torch.float32) * 255.0
-                #     vis_mask = vis_mask.detach().cpu().numpy()
-                #     print(vis_mask.shape)
-                #     cv2.imwrite(f'debug/efficient_mask{str(i)}.png',vis_mask)
-
-                #     vis_mask = label_masks_256[i,0,...].detach().cpu().numpy()
-                #     cv2.imwrite(f'debug/efficient_label{str(i)}.png',vis_mask)
-                # raise NameError
                 
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
             loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
@@ -716,7 +730,6 @@ def text2image_ldm_stable_last(
                     
             image_m = image_m - mean[None,:,None,None]
             image_m = image_m / std[None,:,None,None]
-            #print(k, image_m.max(), image_m.min(), raw_img.max(), raw_img.min())
             loss_mse =  args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
             
             loss = loss_dice + loss_ce - loss_mse
@@ -769,7 +782,7 @@ def text2image_ldm_stable_last(
             color = np.array((pos%256, pos//256%256, pos//(1<<16)))
             worst_mask_show[single_mask!=0] = color
             
-            if i < args.sam_batch:
+            if i < args.prompt_bs:
                 box= tuple((boxes[i].cpu().numpy()/2).tolist())        
                 show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
             show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
@@ -832,11 +845,9 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
-    # print(args.controlnet_path)
-    # raise NameError
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-    # ldm_stable.enable_model_cpu_offload()
+    ldm_stable.enable_model_cpu_offload()
     
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
@@ -857,7 +868,9 @@ if __name__ == '__main__':
     if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save path
-    save_path = args.save_root + '/' + args.prefix + '-SD-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-SAM-' + args.model + '-' + args.model_type +'-'+ str(args.sam_batch)+ '-ADV-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)+  '-' +  str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) 
+    save_path = args.save_root + '/' + args.prefix + '-Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_sz) + '-' + str(args.prompt_type) '-' + str(args.prompt_num) \
+        '-Loss-' + str(args.kappa) +'-'+ str(args.gamma) +'-'+ str(args.eta) + '-' + str(args.beta) + '-' + str(args.norm) + '-Perturbation-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)
+    
     if args.random_latent:
         save_path += '-random_latent'
     
@@ -868,7 +881,7 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(save_path,'adv')): os.mkdir(os.path.join(save_path,'adv'))
     if not os.path.exists(os.path.join(save_path,'record')): os.mkdir(os.path.join(save_path,'record'))
     
-    # Adversarial grad loop
+    # Adversarial optimization loop
     for i in trange(args.start, args.end+1):
         
         # prepare img & mask path
@@ -883,38 +896,35 @@ if __name__ == '__main__':
             print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
             continue
         
-        # load raw img for mse [1,3,512,512] [0,1]
+        # load raw img for mse loss [1,3,512,512] [0,1]
         pil_image = Image.open(img_path).convert('RGB').resize(image_size)
         raw_img_show = np.array(pil_image.resize((512,512)))
         raw_img = (torch.tensor(np.array(pil_image).astype(np.float32), device=device).unsqueeze(0)/255.).permute(0,3, 1, 2)
         raw_img = raw_img - mean[None,:,None,None]
         raw_img = raw_img / std[None,:,None,None]
         
-        # load mask labels & boxes prompt 
+        # load mask labels & boxes prompt & point prompt
         global origin_len
         origin_len = len(os.listdir(label_mask_dir))
         label_masks = torch.empty([0,1,1024,1024]).cuda()
-        for j in range(min(args.sam_batch,origin_len)):
+        for j in range(min(args.prompt_bs,origin_len)):
             label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
-            #print(label_mask_path)
             label_mask = Image.open(label_mask_path).convert('L').resize((image_size))
             label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
-            #print(label_mask_torch.max())
             label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
-        
-        # load sup mask for show
-        sup_masks = torch.empty([0,1,512,512]).cuda()
-        for j in range(min(args.sam_batch,origin_len),origin_len):
-            label_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
-            label_mask = Image.open(label_mask_path).convert('L').resize((512,512)) 
-            label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
-            sup_masks = torch.cat([sup_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
-        # label_masks = label_masks[-1:]
-        
-        boxes = masks_to_boxes(label_masks.squeeze())    
-        #print(torch.max(boxes))
+        boxes = masks_to_boxes(label_masks.squeeze())
+        points = masks_sample_points(label_mask.squeeze(), k=args.prompt_bs)
+        print(poionts.shape)
         
         label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
+            
+        # load sup mask for show
+        sup_masks = torch.empty([0,1,512,512]).cuda()
+        for j in range(min(args.prompt_bs,origin_len),origin_len):
+            sup_mask_path = os.path.join(label_mask_dir,f'segmentation_{str(j)}.png')
+            sup_mask = Image.open(sup_mask_path).convert('L').resize((512,512)) 
+            sup_mask_torch = torch.tensor(np.array(sup_mask)).cuda().to(torch.float32)
+            sup_masks = torch.cat([sup_masks,sup_mask_torch.unsqueeze(0).unsqueeze(0)])
         
         # load caption
         prompt = captions[img_path.split('/')[-1]]
@@ -942,10 +952,10 @@ if __name__ == '__main__':
         mask_show = control_mask.copy()
         control_mask = torch.from_numpy(control_mask).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda() / 255.0
         
-        # adversarial grad
+        # adversarial optimization
         controller = AttentionStore()
         start = time.time()            
-        image_inv, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,boxes=boxes, label_masks_256=label_masks_256)    
+        image_inv, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,boxes=boxes, points=points,label_masks_256=label_masks_256)    
         print('Grad Time:', time.time() - start)
         
         # show 
