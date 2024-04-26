@@ -27,8 +27,6 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 # model setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
-parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
-
 
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
@@ -664,7 +662,7 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("../../2023-12-19/ASAM-Main/ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
@@ -693,19 +691,27 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(args.save_root , 'inv')): os.mkdir(os.path.join(args.save_root , 'inv'))
     if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
-    # Inversion loop
-    for i in trange(args.start, args.end+1):
+    names = sorted(os.listdir(args.data_root))
+    names = [name[:-4] for name in names if '.jpg' in name]
+    if args.end != -1:
+        names = names[args.start:args.end+1]
+    else:
+        names = names[args.start:]
+        
+    print(names)    
+    # Adversarial optimization loop
+    for name in tqdm(names):
         
         # prepare img & control mask path
-        img_path = os.path.join(args.data_root, 'sa_'+ str(i) + '.jpg')
-        control_mask_path = os.path.join(args.control_mask_dir, 'sa_'+ str(i) + '.png')
+        img_path = os.path.join(args.data_root, name + '.jpg')
+        control_mask_path = os.path.join(args.control_mask_dir, name + '.png')
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
         # init x_t & uncond_emb
-        latent_path = f"{args.save_root}/embeddings/sa_{i}_latent.pth"
-        uncond_path = f"{args.save_root}/embeddings/sa_{i}_uncond.pth"
+        latent_path = f"{args.save_root}/embeddings/{name}_latent.pth"
+        uncond_path = f"{args.save_root}/embeddings/{name}_uncond.pth"
         if os.path.exists(latent_path) and os.path.exists(uncond_path):
             print(latent_path, uncond_path, " has existed!")
             #continue
@@ -727,13 +733,13 @@ if __name__ == '__main__':
         gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)
         
         # save x_t & uncond_emb
-        torch.save(x_t, f'{args.save_root}/embeddings/sa_{i}_latent.pth')
-        torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/sa_{i}_uncond.pth')
+        torch.save(x_t, f'{args.save_root}/embeddings/{name}_latent.pth')
+        torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/{name}_uncond.pth')
         
         
         # raise NameError
         # show 
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
-        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/sa_{i}', shuffix='.jpg')
-        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/sa_{i}', shuffix='.png')
+        ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/{name}', shuffix='.jpg')
+        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/{name}', shuffix='.png')
