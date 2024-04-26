@@ -661,7 +661,8 @@ def text2image_ldm_stable_last(
     else:
         uncond_embeddings_ = None
 
-    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)    model.scheduler.set_timesteps(num_inference_steps)
+    latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)    
+    model.scheduler.set_timesteps(num_inference_steps)
     best_latent = latents
     ori_latents = latents.clone().detach()
     adv_latents = latents.clone().detach()
@@ -868,7 +869,9 @@ if __name__ == '__main__':
     if args.check_inversion or args.check_controlnet: raise NameError 
     
     # Prepare save path
-    save_path = args.save_root + '/' + args.prefix + '-Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_sz) + '-' + str(args.prompt_type) '-' + str(args.prompt_num) \
+    save_path = args.save_root + '/' 
+    if args.prefix != "": save_path += args.prefix + '-'
+    save_path += 'Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) +'-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_bs) + '-' + str(args.prompt_type) + '-' + str(args.prompt_num) + \
         '-Loss-' + str(args.kappa) +'-'+ str(args.gamma) +'-'+ str(args.eta) + '-' + str(args.beta) + '-' + str(args.norm) + '-Perturbation-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)
     
     if args.random_latent:
@@ -881,19 +884,28 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(save_path,'adv')): os.mkdir(os.path.join(save_path,'adv'))
     if not os.path.exists(os.path.join(save_path,'record')): os.mkdir(os.path.join(save_path,'record'))
     
+    names = sorted(os.listdir(args.data_root))
+    names = [name[:-4] for name in names if '.jpg' in name]
+    if args.end != -1:
+        names = names[args.start:args.end+1]
+    else:
+        names = names[args.start:]
+        
+    print(names)    
     # Adversarial optimization loop
-    for i in trange(args.start, args.end+1):
+    for name in tqdm(names):
         
         # prepare img & mask path
-        img_path = args.data_root+'/'+'sa_'+str(i)+'.jpg'
-        control_mask_path = args.control_mask_dir+'/'+'sa_'+str(i)+'.png'
-        label_mask_dir = args.data_root+'/'+'sa_'+str(i)
+        img_path = args.data_root+'/'+name+'.jpg'
+        control_mask_path = args.control_mask_dir+'/'+name+'.png'
+        label_mask_dir = args.data_root+'/'+name
+        
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
-        if os.path.exists(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png')) and not args.debug:
-            print(os.path.join(save_path, 'adv', 'sa_'+str(i)+'.png'), " has existed!")
+        if os.path.exists(os.path.join(save_path, 'adv', name+'.png')) and not args.debug:
+            print(os.path.join(save_path, 'adv', name+'.png'), " has existed!")
             continue
         
         # load raw img for mse loss [1,3,512,512] [0,1]
@@ -913,9 +925,8 @@ if __name__ == '__main__':
             label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
             label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
         boxes = masks_to_boxes(label_masks.squeeze())
-        points = masks_sample_points(label_mask.squeeze(), k=args.prompt_bs)
-        print(poionts.shape)
-        
+        points = masks_sample_points(label_masks.squeeze(), k=args.prompt_num)
+    
         label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
             
         # load sup mask for show
@@ -931,8 +942,8 @@ if __name__ == '__main__':
         print(prompt)
         
         # load x_t & uncondition embeddings 
-        latent_path = f"{args.inversion_dir}/sa_{i}_latent.pth"
-        uncond_path = f"{args.inversion_dir}/sa_{i}_uncond.pth"
+        latent_path = f"{args.inversion_dir}/{name}.pth"
+        uncond_path = f"{args.inversion_dir}/{name}.pth"
         
         if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
             print(latent_path, uncond_path, "do not exist!")
@@ -959,9 +970,9 @@ if __name__ == '__main__':
         print('Grad Time:', time.time() - start)
         
         # show 
-        ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv','sa_'+str(i)))
-        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair','sa_'+str(i)), shuffix='.jpg')
+        ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv',name))
+        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair',name), shuffix='.jpg')
         
         # record adversarial iou
-        with open(save_path+'/record/sa_'+str(i)+'.txt','w') as f:
+        with open(save_path+'/record/'+name+'.txt','w') as f:
             f.write(str(worst_iou))
