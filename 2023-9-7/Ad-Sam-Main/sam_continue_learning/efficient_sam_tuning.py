@@ -829,8 +829,8 @@ if __name__ == "__main__":
     }
     
     dataset_ishape_antenna = {"name": "ishape",
-        "im_dir": "data/ishape_dataset/antenna/val/image",
-        "gt_dir": "data/ishape_dataset/antenna/val/instance_map",
+        "im_dir": "data/ishape/antenna/val/image",
+        "gt_dir": "data/ishape/antenna/val/instance_map",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
@@ -991,8 +991,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/splits_final_deblurred/train/data",
-        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
+        "im_dir": "data/ZeroWaste/train/data",
+        "gt_dir": "data/ZeroWaste/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
@@ -1048,8 +1048,8 @@ if __name__ == "__main__":
     }
     
     dataset_Kvasir_sessile = {"name": "Kvasir_sessile",
-        "im_dir": "data/sessile-main-Kvasir-SEG/images",
-        "gt_dir": "data/sessile-main-Kvasir-SEG/masks",
+        "im_dir": "data/Kvasir-sessile/images",
+        "gt_dir": "data/Kvasir-sessile/masks",
         "im_ext": ".jpg",
         "gt_ext": ".jpg"
     }
