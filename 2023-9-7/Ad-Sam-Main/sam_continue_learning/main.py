@@ -169,12 +169,8 @@ class MaskDecoder_Tuning(MaskDecoder):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
         # Concatenate output tokens
-        
-        #print(self.iou_token.weight.shape, self.mask_tokens.weight.shape)
         output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
         output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
-        #print(output_tokens.shape)
-        #raise NameError
         tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
 
         # Expand per-image data in batch direction to be per-mask
@@ -208,7 +204,6 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
     if len(masks) == 0:
         return
 
-    #print(masks.shape, len(ious), len(boundary_ious))
     for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
        
         plt.figure(figsize=(10,10))
@@ -228,6 +223,26 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
         plt.axis('off')
         plt.savefig(filename+'_'+str(i)+'.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
+
+def show_anns2(labels_val, masks, input_point, input_box, input_label, filename, image, ious, boundary_ious):
+    if len(masks) == 0:
+        return
+    
+    gt_mask_show, pred_mask_show = np.zeros((1024,1024,3)), np.zeros((1024,1024,3))
+    length = 1<<24
+    num = labels_val.shape[0]
+    for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
+        
+        label_val = (label_val>=123.).to(torch.int).detach().cpu().squeeze().numpy()
+        mask = (mask>=0.5).to(torch.int).detach().cpu().squeeze().numpy()
+        pos = int((length-1) *(i+1) / num)
+        color = np.array((pos%256, pos//256%256, pos//(1<<16)))
+        gt_mask_show[label_val!=0] = color
+        pred_mask_show[mask!=0] = color
+        
+    cv2.imwrite(filename+'_gt_color.jpg', gt_mask_show)
+    cv2.imwrite(filename+'_color.jpg', pred_mask_show)
+
 
 def record_iou(filename, ious, boundary_ious):
     if len(ious) == 0:
@@ -323,6 +338,7 @@ def get_args_parser():
     parser.add_argument("--output_prefix", type=str, required=False, 
                         help="Path to the directory where masks and checkpoints will be output")
     parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--visualize2', action='store_true')
     parser.add_argument('--model_save_fre', default=1, type=int)
     return parser.parse_args()
 
@@ -396,7 +412,6 @@ def main(train_datasets, valid_datasets, args):
         else: parameters_no_grad += 1
     print("parameters_grad Number:", parameters_grad)
     print("parameters_no_grad Number:", parameters_no_grad)
-    
     
     sam_checkpoint_map = {
         'vit_b': os.path.join(args.load_prefix,'pretrained_checkpoint/sam_vit_b_01ec64.pth'),
@@ -612,9 +627,6 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
-            # labels_val_np = labels_val[0,0,...].cpu().data.numpy()
-            # cv2.imwrite("tmp.png",labels_val_np*255.0)
-            # raise NameError
             if n == 0:
                 bad_examples += 1
                 loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
@@ -650,7 +662,6 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 dict_input['boxes'] = labels_box #N 4
             elif args.prompt_type == 'point': 
                 point_coords = labels_points #[N 10 2]
-                #print(point_coords.shape)
                 dict_input['point_coords'] = point_coords
                 dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
             elif args.prompt_type == 'noise_mask':
@@ -681,7 +692,6 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     multimask_output=False,
                 )
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-            #print(masks.shape,labels_ori.shape)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -700,7 +710,6 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 metric_logger.update(**loss_dict_reduced)
                 continue    
         
-            
             if args.prompt_type =='box':
                 save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
             else:
@@ -716,6 +725,14 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     
                 if args.prompt_type=='box':
                     show_anns(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
+                elif args.prompt_type=='point':
+                    show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
+            
+            if args.visualize2:
+                masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+                imgs_ii = imgs[0].astype(dtype=np.uint8)
+                if args.prompt_type=='box':
+                    show_anns2(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
                 elif args.prompt_type=='point':
                     show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
             
@@ -744,123 +761,120 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
 if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
-    
+        
     ## Train dataset
+
+    dataset_lecun = {"name": "lecun_sam_subset",
+        "im_dir": "../lecun_photo",
+        "gt_dir": "../lecun_photo",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    dataset_lecun_adv = {"name": "lecun_sam_subset_adv",
+        "im_dir": "../output/lecun-Grad/Attacker-7.5-50-Definder-sam-vit_b-140-point-10-Loss-100.0-100.0-100.0-1.0-2-Perturbation-0.2-10-0.02-0.5/adv",
+        "gt_dir": "../lecun_photo",
+        "im_ext": ".png",
+        "gt_ext": ""
+    }
+    
     dataset_sa000000 = {"name": "sam_subset",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".jpg",
-        "gt_ext": ""}
-    
+        "gt_ext": ""
+    }
+
     dataset_sa000138_dci = {"name": "sam_subset",
         "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000138",
         "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
+    
+    dataset_sa000000efficient = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "im_ext": ".png",
+        "gt_ext": ""
+    }
     
     dataset_sa000000adv = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
     
     dataset_sa000000adv_dice = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000adv_dice_0_4 = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-
-    dataset_sa000000adv_dice_0_8 = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.8-10-0.08-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
     
     dataset_sa000001adv_dice = {"name": "sam_subset",
         "im_dir": "../output/sa_000001-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000001",
         "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
     
     dataset_sa000000_Inversion = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Inversion/inv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000adv_1600 = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000inv = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
-        "gt_dir": "../../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
             
-    dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
-        "im_dir": "../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ".json"}
-    
     dataset_DatasetDM = {"name": "DatasetDM",
         "im_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
         "gt_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
         "im_ext": ".jpg",
-        "gt_ext": ".jpg"}
+        "gt_ext": ".jpg"
+    }
     
     dataset_sa000000pgd = {"name": "sam_subset",
         "im_dir": "work_dirs/PGD",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".jpg",
-        "gt_ext": ".json"}
-    
-    dataset_sa00000pgd_512 = {"name": "sam_subset",
-        "im_dir": "work_dirs/PGD_512",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".jpg",
-        "gt_ext": ""}
+        "gt_ext": ".json"
+    }
     
     ## valid set
     dataset_hrsod_val = {"name": "HRSOD-TE",
         "im_dir": "data/HRSOD-TE/imgs",
         "gt_dir": "data/HRSOD-TE/gts",
         "im_ext": ".jpg",
-        "gt_ext": ".png"}
-
+        "gt_ext": ".png"
+    }
     
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
         "im_dir": "data/ADE20K_2016_07_26/images/validation",
         "gt_dir": "data/ADE20K_2016_07_26/images/validation",
         "im_ext": ".jpg",
-        "gt_ext": "_seg.png"}
+        "gt_ext": "_seg.png"
+    }
     
     dataset_cityscapes_val = {"name": "cityscaps_val",
         "im_dir": "data/cityscapes/leftImg8bit/val",
         "gt_dir": "data/cityscapes/gtFine/val",
         "im_ext": "_leftImg8bit.png",
-        "gt_ext": "_gtFine_instanceIds.png"}
+        "gt_ext": "_gtFine_instanceIds.png"
+    }
     
     dataset_voc2012_val = {"name": "voc2012_val",
         "im_dir": "data/VOC2012/JPEGImages_val",
         "gt_dir": "data/VOC2012/SegmentationObject",
         "im_ext": ".jpg",
-        "gt_ext": ".png"}
+        "gt_ext": ".png"
+    }
 
     dataset_coco2017_val = {"name": "coco2017_val",
         "im_dir": "data/COCO2017-val/val2017",
         "annotation_file": "data/COCO2017-val/instances_val2017.json",
         "im_ext": ".jpg"
-        }
+    }
     
     dataset_camo = {"name": "camo",
         "im_dir": "data/CAMO/imgs",
@@ -869,9 +883,9 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_ishape_antenna = {"name": "ishape",
-        "im_dir": "data/ishape_dataset/antenna/val/image",
-        "gt_dir": "data/ishape_dataset/antenna/val/instance_map",
+    dataset_ishape_antenna = {"name": "ishape***",
+        "im_dir": "data/ishape/antenna/val/image",
+        "gt_dir": "data/ishape/antenna/val/instance_map",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
@@ -883,28 +897,26 @@ if __name__ == "__main__":
         "gt_ext": "_label.png"
     }
     
-    
     dataset_pascal_part58 = {"name": "Pascal_Part58",
-            "im_dir": "data/Pascal-Part-201/Img_val",
-            "gt_dir": "data/Pascal-Part-201/parts58",
-            "im_ext": ".jpg",
-            "gt_ext": ".png"
+        "im_dir": "data/Pascal-Part-201/Img_val",
+        "gt_dir": "data/Pascal-Part-201/parts58",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     dataset_pascal_part201 = {"name": "Pascal_Part201",
-            "im_dir": "data/Pascal-Part-201/Img_val",
-            "gt_dir": "data/Pascal-Part-201/parts201",
-            "im_ext": ".jpg",
-            "gt_ext": ".png"
+        "im_dir": "data/Pascal-Part-201/Img_val",
+        "gt_dir": "data/Pascal-Part-201/parts201",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     dataset_pascal_part108 = {"name": "Pascal_Part108",
-            "im_dir": "data/Pascal-Part-201/Img_val",
-            "gt_dir": "data/Pascal-Part-201/parts108",
-            "im_ext": ".jpg",
-            "gt_ext": ".png"
+        "im_dir": "data/Pascal-Part-201/Img_val",
+        "gt_dir": "data/Pascal-Part-201/parts108",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
-    
     
     dataset_ImagenetPart = {"name": "ImagenetPart",
         "im_dir": "data/PartImageNet/images/test",
@@ -953,24 +965,17 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
-        "im_ext": ".jpg",
-    }
-    
-    dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_dir": "data/Plittersdorf/images",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/test.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/val.json",
         "im_ext": ".jpg",
     }
-    
         
     dataset_egohos = {"name": "egohos",
         "im_dir": "data/egohos/val/image",
@@ -979,11 +984,12 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_LVIS = {"name": "LVIS",
+    dataset_LVIS = {"name": "LVIS***",
         "im_dir": "data/LVIS/val2017",
         "annotation_file": "data/LVIS/annotations/lvis_v1_val.json",
         "im_ext": ".jpg",
     }
+    
     dataset_BBC038v1 = {"name": "BBC038v1",
         "im_dir": "data/BBC038V1-Train",
         "annotation_file": "data/BBC038V1-Train",
@@ -991,34 +997,35 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_DOORS1 = {"name": "DOORS1",
+    dataset_DOORS1 = {"name": "DOORS1***",
         "im_dir": "data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/img",
         "gt_dir": "data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/Rock_all",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
-    dataset_DOORS2 = {"name": "DOORS2",
+    dataset_DOORS2 = {"name": "DOORS2***",
         "im_dir": "data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/img",
         "gt_dir": "data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/Rock_all",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_ABOVE = {"name": "NDD20",
+    dataset_NDD20_ABOVE = {"name": "NDD20_Above",
         "im_dir": "data/NDD20/ABOVE",
         "gt_dir": "data/NDD20/ABOVE_LABELS",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_BELOW = {"name": "NDD20_coco",
+    dataset_NDD20_BELOW = {"name": "NDD20_Below",
         "im_dir": "data/NDD20/BELOW",
-        "annotation_file": "/data/tanglv/xhk/ASAM/2023-9-7/Ad-Sam-Main/sam_continue_learning/data/COCO2017-val/instances_val2017.json",
+        "gt_dir": "data/NDD20/BELOW_LABELS",
         "im_ext": ".jpg",
+        "gt_ext": ".png"
     }   
         
-    dataset_PIDRAY = {"name": "pid_coco",
+    dataset_PIDRAY = {"name": "pid_coco***",
         "im_dir": "data/pidray/hard",
         "annotation_file": "data/pidray/annotations/xray_test_hard.json",
         "im_ext": ".jpg",
@@ -1031,8 +1038,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/splits_final_deblurred/train/data",
-        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
+        "im_dir": "data/ZeroWaste/train/data",
+        "gt_dir": "data/ZeroWaste/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
@@ -1072,7 +1079,7 @@ if __name__ == "__main__":
         "gt_ext": ".json"
     }
     
-    dataset_gtea_train = {"name": "gtea",
+    dataset_gtea_train = {"name": "gtea***",
         "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
         "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
         "im_ext": ".jpg",
@@ -1088,11 +1095,12 @@ if __name__ == "__main__":
     }
     
     dataset_Kvasir_sessile = {"name": "Kvasir_sessile",
-        "im_dir": "data/sessile-main-Kvasir-SEG/images",
-        "gt_dir": "data/sessile-main-Kvasir-SEG/masks",
+        "im_dir": "data/Kvasir-sessile/images",
+        "gt_dir": "data/Kvasir-sessile/masks",
         "im_ext": ".jpg",
         "gt_ext": ".jpg"
     }
+    
     dataset_CVC_ClinicDB = {"name": "CVC_ClinicDB",
         "im_dir": "data/CVC-ClinicDB/Original",
         "gt_dir": "data/CVC-ClinicDB/Ground Truth",

@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
 import json
 from pycocotools import mask
+import cv2
 
 
 class Ade20kDataset(Dataset):
@@ -67,8 +68,11 @@ class Ade20kDataset(Dataset):
         gt_path = self.dataset["gt_path"][idx]
         
         im = io.imread(im_path)
-        naive_gt = io.imread(gt_path)        
-        
+        try:
+            naive_gt = io.imread(gt_path)        
+        except:
+            naive_gt = cv2.imread(gt_path)  
+            
         if len(naive_gt.shape) < 3:
             naive_gt = naive_gt[:, :, np.newaxis]
         if naive_gt.shape[2] == 1:

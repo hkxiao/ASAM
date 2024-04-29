@@ -76,15 +76,20 @@ class SamDataset(Dataset):
         except Exception as e:
             print(f"Error occurred: {e}")
             print(f"Problematic image path: {im_path}")
-            
+                    
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
             im = np.repeat(im, 3, axis=2)
-                
+        if im.shape[-1] == 4:
+            im = im[:, :, :3]  
+                  
         gt = None
 
-        for i in range(self.batch_size_prompt_start, self.batch_size_prompt_start+self.batch_size_prompt):
+        if self.batch_size_prompt == -1: end = gt_num
+        else: end = self.batch_size_prompt_start+self.batch_size_prompt
+        
+        for i in range(self.batch_size_prompt_start, end):
             #print(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
             tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
             if len(tmp_gt.shape) > 2:

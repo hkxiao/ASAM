@@ -144,6 +144,8 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
         for i in range(len(name_im_gt_list)):  
             print(name_im_gt_list[i]['dataset_name'])
             if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            #coco格式
+            elif 'coco' in name_im_gt_list[i]['dataset_name']: gos_dataset = COCODataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             elif 'ovis' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
             elif 'woodscape' in name_im_gt_list[i]['dataset_name']: gos_dataset = WoodscapeDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             #ADE dataloader 三通道 排除了[0 0 0]
@@ -152,8 +154,6 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
             elif 'cityscaps_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = CityScapesDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #voc 三通道  排除了[0 0 0] [224 224 192]
             elif 'voc2012_val' in name_im_gt_list[i]['dataset_name']: gos_dataset = VOC2012Dataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
-            #coco格式
-            elif 'coco' in name_im_gt_list[i]['dataset_name']: gos_dataset = COCODataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             #DRAM 三通道 排除了[0 0 0]
             elif 'DRAM' in name_im_gt_list[i]['dataset_name']: gos_dataset = Ade20kDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             elif 'streets' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)

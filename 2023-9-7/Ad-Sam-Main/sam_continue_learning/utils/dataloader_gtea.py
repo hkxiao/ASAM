@@ -66,30 +66,18 @@ class GTEADataset(Dataset):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
         
-        # print(im_path, gt_path)
-        # raise NameError
         im = io.imread(im_path)
         naive_gt = io.imread(gt_path)        
         
-        # print(naive_gt.shape)
-        # print(np.max(naive_gt))
-        # raise NameError
-        
         unique_list = sorted(np.unique(naive_gt))        
         gt = np.empty((0,naive_gt.shape[0],naive_gt.shape[1]))
-        
-        print(len(unique_list))
         
         for i in unique_list:
             if i==0: continue
             tmp_gt = np.zeros((naive_gt.shape[0],naive_gt.shape[1]))     
             tmp_gt[naive_gt==i]=255
             gt = np.concatenate((gt,tmp_gt[np.newaxis,:,:]))
-            
-            # import cv2
-            # cv2.imwrite(f"{str(i)}.png",tmp_gt)
-        # print(gt.shape)
-        # raise NameError       
+                
         if len(im.shape) < 3:
             im = im[:, :, np.newaxis]
         if im.shape[2] == 1:
