@@ -1117,7 +1117,7 @@ if __name__ == "__main__":
         for train_dataset in args.train_datasets:
             args.output += train_dataset.replace('dataset_','')
             args.output += '-'
-        args.output += str(args.train_img_num) + '-' + args.model_type
+        args.output += args.model_type + '-' + str(args.train_img_num) 
         
     elif args.baseline: 
         if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
