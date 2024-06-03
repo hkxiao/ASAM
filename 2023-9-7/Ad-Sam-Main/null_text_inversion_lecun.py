@@ -27,8 +27,6 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 # model setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
-parser.add_argument('--sam_batch', type=int, default=150, help='cnn')
-
 
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')

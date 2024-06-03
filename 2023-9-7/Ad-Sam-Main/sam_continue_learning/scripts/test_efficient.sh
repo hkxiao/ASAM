@@ -9,10 +9,10 @@ python -m torch.distributed.run --nproc_per_node=4 --master_port=30011  efficien
 --numworkers=0 \
 --learning_rate=2e-3 \
 --train-datasets dataset_sa000000efficient \
---valid-datasets dataset_ovis_train \
+--valid-datasets dataset_ZeroWaste dataset_ndis_train  dataset_Plittersdorf_test dataset_egohos \
 --slow_start \
 --prompt_type box \
---restore-model pretrained_checkpoint/efficient_sam_vitt.pt \
+--restore-model work_dirs/easam/epoch_17*.pth \
 --eval
 
 

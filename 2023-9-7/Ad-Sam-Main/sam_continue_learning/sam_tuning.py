@@ -208,7 +208,7 @@ def show_anns(labels_val, masks, input_point, input_box, input_label, filename, 
     if len(masks) == 0:
         return
 
-    print(masks.shape, len(ious), len(boundary_ious))
+    #print(masks.shape, len(ious), len(boundary_ious))
     for i, (label_val,mask, iou, biou) in enumerate(zip(labels_val, masks, ious, boundary_ious)):
        
         plt.figure(figsize=(10,10))
@@ -622,7 +622,7 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
                 dict_input['boxes'] = labels_box #N 4
             elif args.prompt_type == 'point': 
                 point_coords = labels_points #[N 10 2]
-                print(point_coords.shape)
+                #print(point_coords.shape)
                 dict_input['point_coords'] = point_coords
                 dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
             elif args.prompt_type == 'noise_mask':
@@ -646,8 +646,8 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
             for output in batched_output:
                 masks = torch.concat([masks, output['low_res_logits']])
             
-            print(torch.max(masks))
-            print(masks.shape,labels_ori.shape)
+            # print(torch.max(masks))
+            # print(masks.shape,labels_ori.shape)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -705,122 +705,121 @@ if __name__ == "__main__":
 
     ### --------------- Configuring the Train and Valid datasets ---------------
     
+    ### --------------- Configuring the Train and Valid datasets ---------------
+        
     ## Train dataset
+
+    dataset_lecun = {"name": "lecun_sam_subset",
+        "im_dir": "../lecun_photo",
+        "gt_dir": "../lecun_photo",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    dataset_lecun_adv = {"name": "lecun_sam_subset_adv",
+        "im_dir": "../output/lecun-Grad/Attacker-7.5-50-Definder-sam-vit_b-140-point-10-Loss-100.0-100.0-100.0-1.0-2-Perturbation-0.2-10-0.02-0.5/adv",
+        "gt_dir": "../lecun_photo",
+        "im_ext": ".png",
+        "gt_ext": ""
+    }
+    
     dataset_sa000000 = {"name": "sam_subset",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".jpg",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
+
+    dataset_sa000138_dci = {"name": "sam_subset",
+        "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".png",
+        "gt_ext": ""
+    }
     
-    dataset_sa000000_512 = {"name": "sam_subset",
-        "im_dir": "../sam-1b/sa_000000/512",
+    dataset_sa000000efficient = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".jpg",
-        "gt_ext": ""}
+        "im_ext": ".png",
+        "gt_ext": ""
+    }
     
     dataset_sa000000adv = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-100-1-2-10-Clip-0.2/adv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
     
     dataset_sa000000adv_dice = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000adv_dice_0_4 = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-
-    dataset_sa000000adv_dice_0_8 = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.8-10-0.08-0.5-100.0-100.0-1.0-2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
     
     dataset_sa000001adv_dice = {"name": "sam_subset",
         "im_dir": "../output/sa_000001-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000001",
         "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
     
     dataset_sa000000_Inversion = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Inversion/inv",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000adv_1600 = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-0.5-sam-vit_b-150-0.01-1600.0-1-2-10-Clip-0.2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
-    
-    dataset_sa000000inv = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000@4-Grad/diversity-01-mi-SD-9.0-20-SAM-sam-vit_b-4-ADV-0.2-10-0.02-0.5-10.0-0.1-2/adv",
-        "gt_dir": "../../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ""}
+        "gt_ext": ""
+    }
             
-    dataset_sam_subset_adv_vit_huge = {"name": "sam_subset",
-        "im_dir": "../11187-Grad/skip-ablation-01-mi-0.5-sam-vit_h-40-0.01-100-1-2-10-Clip-0.2/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".png",
-        "gt_ext": ".json"}
-    
     dataset_DatasetDM = {"name": "DatasetDM",
         "im_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/Image",
         "gt_dir": "../DatasetDM/DataDiffusion/SAM_Train_10_images_t1_10layers_NoClass_matting/label",
         "im_ext": ".jpg",
-        "gt_ext": ".jpg"}
+        "gt_ext": ".jpg"
+    }
     
     dataset_sa000000pgd = {"name": "sam_subset",
         "im_dir": "work_dirs/PGD",
         "gt_dir": "../sam-1b/sa_000000",
         "im_ext": ".jpg",
-        "gt_ext": ".json"}
-    
-    dataset_sa00000pgd_512 = {"name": "sam_subset",
-        "im_dir": "work_dirs/PGD_512",
-        "gt_dir": "../sam-1b/sa_000000",
-        "im_ext": ".jpg",
-        "gt_ext": ""}
+        "gt_ext": ".json"
+    }
     
     ## valid set
     dataset_hrsod_val = {"name": "HRSOD-TE",
         "im_dir": "data/HRSOD-TE/imgs",
         "gt_dir": "data/HRSOD-TE/gts",
         "im_ext": ".jpg",
-        "gt_ext": ".png"}
-
+        "gt_ext": ".png"
+    }
     
     dataset_ade20k_val = {"name": "ADE20K_2016_07_26",
         "im_dir": "data/ADE20K_2016_07_26/images/validation",
         "gt_dir": "data/ADE20K_2016_07_26/images/validation",
         "im_ext": ".jpg",
-        "gt_ext": "_seg.png"}
+        "gt_ext": "_seg.png"
+    }
     
     dataset_cityscapes_val = {"name": "cityscaps_val",
         "im_dir": "data/cityscapes/leftImg8bit/val",
         "gt_dir": "data/cityscapes/gtFine/val",
         "im_ext": "_leftImg8bit.png",
-        "gt_ext": "_gtFine_instanceIds.png"}
+        "gt_ext": "_gtFine_instanceIds.png"
+    }
     
     dataset_voc2012_val = {"name": "voc2012_val",
         "im_dir": "data/VOC2012/JPEGImages_val",
         "gt_dir": "data/VOC2012/SegmentationObject",
         "im_ext": ".jpg",
-        "gt_ext": ".png"}
+        "gt_ext": ".png"
+    }
 
     dataset_coco2017_val = {"name": "coco2017_val",
         "im_dir": "data/COCO2017-val/val2017",
         "annotation_file": "data/COCO2017-val/instances_val2017.json",
         "im_ext": ".jpg"
-        }
+    }
     
     dataset_camo = {"name": "camo",
         "im_dir": "data/CAMO/imgs",
@@ -829,9 +828,9 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_ishape_antenna = {"name": "ishape",
-        "im_dir": "data/ishape_dataset/antenna/val/image",
-        "gt_dir": "data/ishape_dataset/antenna/val/instance_map",
+    dataset_ishape_antenna = {"name": "ishape***",
+        "im_dir": "data/ishape/antenna/val/image",
+        "gt_dir": "data/ishape/antenna/val/instance_map",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
@@ -843,28 +842,26 @@ if __name__ == "__main__":
         "gt_ext": "_label.png"
     }
     
-    
     dataset_pascal_part58 = {"name": "Pascal_Part58",
-            "im_dir": "data/Pascal-Part-201/Img_val",
-            "gt_dir": "data/Pascal-Part-201/parts58",
-            "im_ext": ".jpg",
-            "gt_ext": ".png"
+        "im_dir": "data/Pascal-Part-201/Img_val",
+        "gt_dir": "data/Pascal-Part-201/parts58",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     dataset_pascal_part201 = {"name": "Pascal_Part201",
-            "im_dir": "data/Pascal-Part-201/Img_val",
-            "gt_dir": "data/Pascal-Part-201/parts201",
-            "im_ext": ".jpg",
-            "gt_ext": ".png"
+        "im_dir": "data/Pascal-Part-201/Img_val",
+        "gt_dir": "data/Pascal-Part-201/parts201",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
     
     dataset_pascal_part108 = {"name": "Pascal_Part108",
-            "im_dir": "data/Pascal-Part-201/Img_val",
-            "gt_dir": "data/Pascal-Part-201/parts108",
-            "im_ext": ".jpg",
-            "gt_ext": ".png"
+        "im_dir": "data/Pascal-Part-201/Img_val",
+        "gt_dir": "data/Pascal-Part-201/parts108",
+        "im_ext": ".jpg",
+        "gt_ext": ".png"
     }
-    
     
     dataset_ImagenetPart = {"name": "ImagenetPart",
         "im_dir": "data/PartImageNet/images/test",
@@ -913,24 +910,17 @@ if __name__ == "__main__":
     }
     
     dataset_Plittersdorf_test = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/test.json",
-        "im_ext": ".jpg",
-    }
-    
-    dataset_Plittersdorf_train = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/train.json",
+        "im_dir": "data/Plittersdorf/images",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/test.json",
         "im_ext": ".jpg",
     }
     
     dataset_Plittersdorf_val = {"name": "Plittersdorf_coco",
-        "im_dir": "data/plittersdorf_instance_segmentation_coco/images",
-        "annotation_file": "data/plittersdorf_instance_segmentation_coco/val.json",
+        "im_dir": "data/Plittersdorf/images",
+        "annotation_file": "data/Plittersdorf/val.json",
         "im_ext": ".jpg",
     }
-    
         
     dataset_egohos = {"name": "egohos",
         "im_dir": "data/egohos/val/image",
@@ -939,11 +929,12 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_LVIS = {"name": "LVIS",
+    dataset_LVIS = {"name": "LVIS***",
         "im_dir": "data/LVIS/val2017",
         "annotation_file": "data/LVIS/annotations/lvis_v1_val.json",
         "im_ext": ".jpg",
     }
+    
     dataset_BBC038v1 = {"name": "BBC038v1",
         "im_dir": "data/BBC038V1-Train",
         "annotation_file": "data/BBC038V1-Train",
@@ -951,34 +942,35 @@ if __name__ == "__main__":
         "gt_ext": ".png"
     }
     
-    dataset_DOORS1 = {"name": "DOORS1",
+    dataset_DOORS1 = {"name": "DOORS1***",
         "im_dir": "data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/img",
         "gt_dir": "data/DOORS/Regression/Te1_5000_b_2022-08-02 11.16.00/Rock_all",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
-    dataset_DOORS2 = {"name": "DOORS2",
+    dataset_DOORS2 = {"name": "DOORS2***",
         "im_dir": "data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/img",
         "gt_dir": "data/DOORS/Regression/Te2_5000_ub_2022-08-02 11.16.11/Rock_all",
         "im_ext": ".png",
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_ABOVE = {"name": "NDD20",
+    dataset_NDD20_ABOVE = {"name": "NDD20_Above",
         "im_dir": "data/NDD20/ABOVE",
         "gt_dir": "data/NDD20/ABOVE_LABELS",
         "im_ext": ".jpg",
         "gt_ext": ".png"
     }
     
-    dataset_NDD20_BELOW = {"name": "NDD20_coco",
+    dataset_NDD20_BELOW = {"name": "NDD20_Below",
         "im_dir": "data/NDD20/BELOW",
-        "annotation_file": "/data/tanglv/xhk/ASAM/2023-9-7/Ad-Sam-Main/sam_continue_learning/data/COCO2017-val/instances_val2017.json",
+        "gt_dir": "data/NDD20/BELOW_LABELS",
         "im_ext": ".jpg",
+        "gt_ext": ".png"
     }   
         
-    dataset_PIDRAY = {"name": "pid_coco",
+    dataset_PIDRAY = {"name": "pid_coco***",
         "im_dir": "data/pidray/hard",
         "annotation_file": "data/pidray/annotations/xray_test_hard.json",
         "im_ext": ".jpg",
@@ -991,8 +983,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/splits_final_deblurred/train/data",
-        "gt_dir": "data/splits_final_deblurred/train/sem_seg",
+        "im_dir": "data/ZeroWaste/train/data",
+        "gt_dir": "data/ZeroWaste/train/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
@@ -1032,7 +1024,7 @@ if __name__ == "__main__":
         "gt_ext": ".json"
     }
     
-    dataset_gtea_train = {"name": "gtea",
+    dataset_gtea_train = {"name": "gtea***",
         "im_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Images",
         "gt_dir": "data/GTEA_hand2k/GTEA_GAZE_PLUS/Masks",
         "im_ext": ".jpg",
@@ -1048,11 +1040,12 @@ if __name__ == "__main__":
     }
     
     dataset_Kvasir_sessile = {"name": "Kvasir_sessile",
-        "im_dir": "data/sessile-main-Kvasir-SEG/images",
-        "gt_dir": "data/sessile-main-Kvasir-SEG/masks",
+        "im_dir": "data/Kvasir-sessile/images",
+        "gt_dir": "data/Kvasir-sessile/masks",
         "im_ext": ".jpg",
         "gt_ext": ".jpg"
     }
+    
     dataset_CVC_ClinicDB = {"name": "CVC_ClinicDB",
         "im_dir": "data/CVC-ClinicDB/Original",
         "gt_dir": "data/CVC-ClinicDB/Ground Truth",

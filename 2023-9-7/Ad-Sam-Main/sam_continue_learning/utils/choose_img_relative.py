@@ -3,9 +3,9 @@ from pathlib import Path
 import shutil
 
 root = 'work_dirs'
-methods = ['fine-tuning-dci-dci-vit_b-11186','sam-baseline-vit_b']
-datasets = ['camo','coco2017_val','DRAM','HRSOD-TE','ibd','pid_coco']
-save_root = root + '/choose_img_relative'
+methods = ['asam-now','sam-baseline-vit_b']
+datasets = ['gtea***','timberseg_coco','ishape***','woodscape']
+save_root = root + '/choose_img_relative_bad'
 Path(save_root).mkdir(exist_ok=True, parents=True)
 
 for dataset in datasets:
@@ -23,7 +23,7 @@ for dataset in datasets:
             info.append((file0,iou0 - iou1))
         except:
             continue
-    info = sorted(info, key=lambda x:x[1], reverse=True)
+    info = sorted(info, key=lambda x:x[1], reverse=False)
     
     save_dir = os.path.join(save_root, 'box' ,dataset)
     Path(save_dir).mkdir(exist_ok=True, parents=True)

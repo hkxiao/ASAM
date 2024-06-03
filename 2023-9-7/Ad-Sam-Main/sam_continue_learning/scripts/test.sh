@@ -1,19 +1,21 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-python -m torch.distributed.run --nproc_per_node=4 --master_port=30004  main.py \
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+python -m torch.distributed.run --nproc_per_node=4 --master_port=30005  main.py \
 --model-type vit_b \
 --output_prefix sam-baseline \
 --batch_size_train=8 \
---batch_size_prompt=4 \
+--batch_size_prompt=8 \
 --batch_size_prompt_start=0 \
 --find_unused_params \
 --numworkers=0 \
 --eval \
 --prompt_type box \
 --train-datasets dataset_sa000000 \
---valid-datasets dataset_ishape_antenna \
---restore-model work_dirs/asam-cvpr-version/asam_vit_b_decoder.pth \
---baseline 
-
+--valid-datasets dataset_hrsod_val \
+--restore-model work_dirs/sam-token_tuning-sa000000-vit_b-11186/epoch_11.pth
+#--restore-sam-model work_dirs/sam-entire_tuning-sa000000-vit_b-11186/epoch_19.pth \
+#--baseline
+# --visualize \
+# --baseline
 # --visualize
 # --baseline
 # --visualize \

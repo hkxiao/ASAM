@@ -16,7 +16,6 @@ import numpy as np
 import math
 import pyiqa
 
-
 parser = argparse.ArgumentParser(description='Test Image Quality!')
 parser.add_argument('--img_path', type=str, default='output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv', help='cnn')
 parser.add_argument('--metric', type=str, default='musiq-koniq', help='cnn')
