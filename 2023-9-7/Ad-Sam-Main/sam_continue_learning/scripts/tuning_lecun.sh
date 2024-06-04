@@ -3,7 +3,7 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port=30013  main.py 
     --model-type vit_b \
     --output_prefix sam-baseline \
     --batch_size_train=1 \
-    --batch_size_prompt=4 \
+    --batch_size_prompt=140 \
     --batch_size_prompt_start=0 \
     --find_unused_params \
     --numworkers=0 \
@@ -13,11 +13,9 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port=30013  main.py 
     --slow_start \
     --max_epoch_num 20 \
     --warmup_epoch 10 \
-    --visualize2 \
     --prompt_type point \
     --point_num 10 \
-    --restore-model work_dirs/asam-cvpr-version/asam_vit_b_decoder.pth \
+    --restore-model work_dirs/fine-tuning-4-dice-vit_b-11186/epoch_12.pth \
     --eval \
-    --baseline \
-    --visualize \
-    --visualize2
+    --visualize2 \
+    # --baseline

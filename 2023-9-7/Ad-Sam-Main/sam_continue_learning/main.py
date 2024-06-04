@@ -169,8 +169,8 @@ class MaskDecoder_Tuning(MaskDecoder):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
         # Concatenate output tokens
-        output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
-        output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
+        output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0) #[5 256]
+        output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1) #[N 5 256]
         tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
 
         # Expand per-image data in batch direction to be per-mask
@@ -239,7 +239,7 @@ def show_anns2(labels_val, masks, input_point, input_box, input_label, filename,
         color = np.array((pos%256, pos//256%256, pos//(1<<16)))
         gt_mask_show[label_val!=0] = color
         pred_mask_show[mask!=0] = color
-        
+    
     cv2.imwrite(filename+'_gt_color.jpg', gt_mask_show)
     cv2.imwrite(filename+'_color.jpg', pred_mask_show)
 
@@ -340,6 +340,8 @@ def get_args_parser():
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--visualize2', action='store_true')
     parser.add_argument('--model_save_fre', default=1, type=int)
+    parser.add_argument('--multimask_output', action='store_true')
+    parser.add_argument('--mask_id', default=0, type=int)
     return parser.parse_args()
 
 
@@ -548,6 +550,7 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
         lr_scheduler.step()
         dist.barrier()
         test_stats = evaluate(args, net, sam, valid_dataloaders)
+        
         train_stats.update(test_stats)
         
         net.train()  
@@ -671,9 +674,8 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             
             dict_input['original_size'] = imgs[0].shape[:2]
             batched_input.append(dict_input)
-            
             with torch.no_grad():            
-                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=args.multimask_output)
 
             batch_len = len(batched_output)
             encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
@@ -682,15 +684,17 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
             
             if args.baseline:
-                masks = batched_output[0]['low_res_logits'].to(torch.float32)
+                masks = batched_output[0]['low_res_logits'].to(torch.float32) if not args.multimask_output else batched_output[0]['low_res_logits'][:,args.mask_id:args.mask_id+1,:,:].to(torch.float32)
+                #print(masks.shape)
             else:
                 masks = net(
                     image_embeddings=encoder_embedding,
                     image_pe=image_pe,
                     sparse_prompt_embeddings=sparse_embeddings,
                     dense_prompt_embeddings=dense_embeddings,
-                    multimask_output=False,
+                    multimask_output=args.multimask_output,
                 )
+                if not args.multimask_output: masks = masks[args.mask_id:args.mask_id+1,:,:]
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
             
             try:
@@ -709,14 +713,17 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 loss_dict_reduced = misc.reduce_dict(loss_dict)
                 metric_logger.update(**loss_dict_reduced)
                 continue    
-        
+                
             if args.prompt_type =='box':
                 save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
             else:
                 save_dir = os.path.join(args.output, args.prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
             
             Path(save_dir).mkdir(parents=True,exist_ok=True)
-            base = ori_im_path[0].split('/')[-1].split('.')[0]
+            
+            base = ori_im_path[0].split('/')[-1]
+            index = base[::-1].index('.')
+            base = base[:-index-1]
             save_base = os.path.join(save_dir, str(base))
             record_iou(save_base, iou_list, boundary_iou_list)
             if visualize:
@@ -734,7 +741,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 if args.prompt_type=='box':
                     show_anns2(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
                 elif args.prompt_type=='point':
-                    show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
+                    show_anns2(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
             
             loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
             loss_dict_reduced = misc.reduce_dict(loss_dict)

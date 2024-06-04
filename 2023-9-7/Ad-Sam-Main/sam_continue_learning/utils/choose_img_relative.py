@@ -3,8 +3,8 @@ from pathlib import Path
 import shutil
 
 root = 'work_dirs'
-methods = ['fine-tuning-dci-dci-vit_b-11186','sam-baseline-vit_b']
-datasets = ['camo','coco2017_val','DRAM','HRSOD-TE','ibd','pid_coco']
+methods = ['asam-cvpr-version','sam-baseline-vit_b']
+datasets = ['Kvasir_SEG', 'Kvasir_sessile', 'CVC_ClinicDB']
 save_root = root + '/choose_img_relative'
 Path(save_root).mkdir(exist_ok=True, parents=True)
 

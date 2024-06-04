@@ -604,7 +604,6 @@ def get_train_dataset(args, accelerator):
             cache_dir=args.cache_dir,
         )
     else:
-        # print(args.train_data_dir)
         if args.train_data_dir is not None:
             dataset = load_dataset(
                 args.train_data_dir,
@@ -617,9 +616,6 @@ def get_train_dataset(args, accelerator):
     # We need to tokenize inputs and targets.
     column_names = dataset["train"].column_names
 
-    # print(column_names)
-    # raise NameError
-    
     # 6. Get the column names for input/target.
     if args.image_column is None:
         image_column = column_names[0]
@@ -810,7 +806,7 @@ def main(args):
     text_encoder_cls_two = import_model_class_from_model_name_or_path(
         args.pretrained_model_name_or_path, args.revision, subfolder="text_encoder_2"
     )
- 
+
     # Load scheduler and models
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
     text_encoder_one = text_encoder_cls_one.from_pretrained(
@@ -838,8 +834,6 @@ def main(args):
         controlnet = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path)
     else:
         logger.info("Initializing controlnet weights from unet")
-        # print('sb')
-    
         controlnet = ControlNetModel.from_unet(unet)
 
     # `accelerate` 0.16.0 will have better support for customized saving
@@ -988,7 +982,6 @@ def main(args):
     # from memory.
     text_encoders = [text_encoder_one, text_encoder_two]
     tokenizers = [tokenizer_one, tokenizer_two]
-   
     train_dataset = get_train_dataset(args, accelerator)
     compute_embeddings_fn = functools.partial(
         compute_embeddings,
