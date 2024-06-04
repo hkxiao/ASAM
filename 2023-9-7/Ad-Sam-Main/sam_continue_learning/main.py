@@ -148,6 +148,8 @@ class MaskDecoder_Tuning(MaskDecoder):
         masks = torch.cat(masks,0)
         iou_preds = torch.cat(iou_preds,0)
         
+        print(iou_pred)
+        raise NameError
         
         # Select the correct mask or masks for output
         if multimask_output:
@@ -617,6 +619,9 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     test_stats = {}
     dataset_id = -1
     
+    iou_head_prediction = 0
+    prompt_nums = 0
+     
     for k in range(len(valid_dataloaders)):
         dataset_id += 1
         bad_examples = 0
@@ -685,7 +690,9 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             
             if args.baseline:
                 masks = batched_output[0]['low_res_logits'].to(torch.float32) if not args.multimask_output else batched_output[0]['low_res_logits'][:,args.mask_id:args.mask_id+1,:,:].to(torch.float32)
-                #print(masks.shape)
+                ious = batched_output[0]['iou_predictions'].to(torch.float32) if not args.multimask_output else batched_output[0]['iou_predictions'][:,args.mask_id:args.mask_id+1].to(torch.float32)
+                iou_head_prediction += torch.sum(ious).item()
+                prompt_nums += torch.numel(ious)
             else:
                 masks = net(
                     image_embeddings=encoder_embedding,
@@ -764,6 +771,10 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             with open(args.output+'/log.txt','a') as f:
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
+                if not args.multimask_output:                
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
+                else:
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction/prompt_nums) +'\n') 
 
     return test_stats
 
