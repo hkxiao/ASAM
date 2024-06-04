@@ -148,9 +148,6 @@ class MaskDecoder_Tuning(MaskDecoder):
         masks = torch.cat(masks,0)
         iou_preds = torch.cat(iou_preds,0)
         
-        print(iou_pred)
-        raise NameError
-        
         # Select the correct mask or masks for output
         if multimask_output:
             mask_slice = slice(1, None)
@@ -160,7 +157,7 @@ class MaskDecoder_Tuning(MaskDecoder):
         iou_pred = iou_pred[:, mask_slice]
 
         # Prepare output
-        return masks
+        return masks, iou_pred
 
     def predict_masks(
         self,
@@ -694,16 +691,20 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 iou_head_prediction += torch.sum(ious).item()
                 prompt_nums += torch.numel(ious)
             else:
-                masks = net(
+                masks, ious = net(
                     image_embeddings=encoder_embedding,
                     image_pe=image_pe,
                     sparse_prompt_embeddings=sparse_embeddings,
                     dense_prompt_embeddings=dense_embeddings,
                     multimask_output=args.multimask_output,
                 )
-                if not args.multimask_output: masks = masks[args.mask_id:args.mask_id+1,:,:]
+                if args.multimask_output: 
+                    ious = ious[:,args.mask_id:args.mask_id+1]
+                    masks = masks[:,args.mask_id:args.mask_id+1,:,:]
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-            
+                iou_head_prediction += torch.sum(ious).item()
+                prompt_nums += torch.numel(ious)
+                
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
                 boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
@@ -766,12 +767,17 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         test_stats.update(resstat)
         print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') )
         
+        if args.multimask_output:                
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
+        else:
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction/prompt_nums) +'\n') 
+                    
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
             with open(args.output+'/log.txt','a') as f:
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
-                if not args.multimask_output:                
+                if args.multimask_output:                
                     f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
                 else:
                     f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction/prompt_nums) +'\n') 
