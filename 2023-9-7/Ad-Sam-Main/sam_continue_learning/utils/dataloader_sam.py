@@ -83,22 +83,25 @@ class SamDataset(Dataset):
             im = np.repeat(im, 3, axis=2)
         if im.shape[-1] == 4:
             im = im[:, :, :3]  
-                  
+        
+        
         gt = None
 
         if self.batch_size_prompt == -1: end = gt_num
         else: end = self.batch_size_prompt_start+self.batch_size_prompt
         
         for i in range(self.batch_size_prompt_start, end):
-            if i == gt_num: continue
-            tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i%gt_num)+'.png'))
+            #if i == gt_num: continue
+            if i >= gt_num: i = (i - self.batch_size_prompt_start) % (gt_num - self.batch_size_prompt_start) + self.batch_size_prompt_start
+            
+            tmp_gt = io.imread(os.path.join(gt_path,'segmentation_'+str(i)+'.png'))
             if len(tmp_gt.shape) > 2:
                 tmp_gt = tmp_gt[:, :, 0]
             tmp_gt = np.expand_dims(tmp_gt, axis=0)
 
-            if i==self.batch_size_prompt_start: gt = tmp_gt
+            if type(gt)!= torch.tensor: gt = tmp_gt
             else: gt = np.concatenate([gt, tmp_gt])
-            
+                
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
         gt = torch.tensor(gt, dtype=torch.float32)
