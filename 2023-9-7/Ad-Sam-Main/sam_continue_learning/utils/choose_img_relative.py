@@ -3,9 +3,15 @@ from pathlib import Path
 import shutil
 
 root = 'work_dirs'
+<<<<<<< HEAD
 methods = ['asam-cvpr-version','sam-baseline-vit_b']
 datasets = ['Kvasir_SEG', 'Kvasir_sessile', 'CVC_ClinicDB']
 save_root = root + '/choose_img_relative'
+=======
+methods = ['asam-now','sam-baseline-vit_b']
+datasets = ['gtea***','timberseg_coco','ishape***','woodscape']
+save_root = root + '/choose_img_relative_bad'
+>>>>>>> e348f52c261efb8f3b92d65c15ac79d09d108456
 Path(save_root).mkdir(exist_ok=True, parents=True)
 
 for dataset in datasets:
@@ -23,7 +29,7 @@ for dataset in datasets:
             info.append((file0,iou0 - iou1))
         except:
             continue
-    info = sorted(info, key=lambda x:x[1], reverse=True)
+    info = sorted(info, key=lambda x:x[1], reverse=False)
     
     save_dir = os.path.join(save_root, 'box' ,dataset)
     Path(save_dir).mkdir(exist_ok=True, parents=True)

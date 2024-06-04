@@ -5,8 +5,6 @@ CUDA_VISIBLE_DEVICES_LIST=(0 1 2 3 4 5 6 7)
 now=1543967
 interval=1500
 
-
-
 for id in "${CUDA_VISIBLE_DEVICES_LIST[@]}"
 do
     echo "Start: ${now}"

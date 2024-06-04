@@ -14,11 +14,12 @@ def show_mask(mask, ax, random_color=False, color=None):
     ax.imshow(mask_image)
     
 
-def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
+def show_points(coords, labels, ax, color ,marker_size=375):
+    pos_points = [coord for i, coord in enumerate(coords) if labels[i]==1]    
+    ax.scatter(tuple([p[0] for p in pos_points]), tuple([p[1] for p in pos_points]), color=color, marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
+
+    # neg_points = [coord for i, coord in enumerate(coords) if labels[i]==0]  
+    # ax.scatter(tuple([p[0] for p in neg_points]), tuple([p[0] for p in neg_points]), color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
     
 def show_box(box, ax, color):
     x0, y0 = box[0], box[1]

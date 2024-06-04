@@ -20,7 +20,7 @@ import cv2
 import json    
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from show import show_box, show_mask 
+from utils.show import show_box, show_mask, show_points 
 
 '''
 CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --beta 1 --alpha 0.01 --steps 10  --ddim_steps=50 --norm 2
@@ -635,10 +635,11 @@ def text2image_ldm_stable_last(
     uncond_embeddings=None,
     start_time=50,
     boxes=None,
+    points=None,
     label_masks_256=None,
     mask_control=None,
     raw_img=None,
-):
+): 
     
     batch_size = len(prompt)
     ptp_utils.register_attention_control(model, controller)
@@ -667,7 +668,7 @@ def text2image_ldm_stable_last(
     ori_latents = latents.clone().detach()
     adv_latents = latents.clone().detach()
     momentum = 0
-    worst_iou = 1.0
+    worst_iou, iou_list = 1.0, []
     worst_mask = None
     for k in range(args.steps):
         latents = adv_latents
@@ -695,13 +696,17 @@ def text2image_ldm_stable_last(
                 example = {}
                 example['image'] = image_m[0]*255.0
                 if args.prompt_type == 'box': example['boxes'] = boxes
-                else: example['points'] = points
+                else: example['point_coords'] = points
+                
+                example['point_labels'] = torch.ones(points.shape[:-1])
+                print(example['point_labels'].shape)
+                print(points.shape)
                 
                 example['original_size'] = image_size
                 output, interbeddings = net([example], multimask_output=False)
                 output = output[0]
                 
-                print(example['image'].dtype, example['boxes'].dtype)
+                # print(example['image'].dtype, example['boxes'].dtype)
                 ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
                 
             elif args.model == 'sam_efficient':
@@ -720,12 +725,14 @@ def text2image_ldm_stable_last(
                 )
                 ad_low_res_logits = F.interpolate(predicted_logits[0,:,:1,:,:],(256,256),mode='bilinear',align_corners=False)
                 ad_masks = torch.ge(ad_low_res_logits,0)
-                
+
+            print(ad_low_res_logits.shape, label_masks_256.shape)
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
             loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
 
             iou = compute_iou(ad_low_res_logits, label_masks_256).item()
             print("iou:",iou)
+            iou_list.append(iou)
             if iou < worst_iou:                
                 best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
                     
@@ -784,8 +791,13 @@ def text2image_ldm_stable_last(
             worst_mask_show[single_mask!=0] = color
             
             if i < args.prompt_bs:
-                box= tuple((boxes[i].cpu().numpy()/2).tolist())        
-                show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
+                if args.prompt_type == 'box':
+                    box= tuple((boxes[i].cpu().numpy()/2).tolist())        
+                    show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
+                else:
+                    point = (points[i].cpu().numpy()/2).tolist()
+                    show_points(point, labels=[1]*args.prompt_num, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256),marker_size=100)
+                                  
             show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
         
     
@@ -794,7 +806,7 @@ def text2image_ldm_stable_last(
     width, height = fig.canvas.get_width_height()
     vis = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3))
     
-    return image, best_latent, worst_mask_show, vis, worst_iou
+    return image, best_latent, worst_mask_show, vis, worst_iou, iou_list
 
 def check_controlnet():
     id = 2    
@@ -848,7 +860,6 @@ if __name__ == '__main__':
     
     controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
-    ldm_stable.enable_model_cpu_offload()
     
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
@@ -906,7 +917,7 @@ if __name__ == '__main__':
         
         if os.path.exists(os.path.join(save_path, 'adv', name+'.png')) and not args.debug:
             print(os.path.join(save_path, 'adv', name+'.png'), " has existed!")
-            continue
+            #continue
         
         # load raw img for mse loss [1,3,512,512] [0,1]
         pil_image = Image.open(img_path).convert('RGB').resize(image_size)
@@ -942,8 +953,8 @@ if __name__ == '__main__':
         print(prompt)
         
         # load x_t & uncondition embeddings 
-        latent_path = f"{args.inversion_dir}/{name}.pth"
-        uncond_path = f"{args.inversion_dir}/{name}.pth"
+        latent_path = f"{args.inversion_dir}/{name}_latent.pth"
+        uncond_path = f"{args.inversion_dir}/{name}_uncond.pth"
         
         if not os.path.exists(latent_path) or not os.path.exists(uncond_path):
             print(latent_path, uncond_path, "do not exist!")
@@ -966,7 +977,7 @@ if __name__ == '__main__':
         # adversarial optimization
         controller = AttentionStore()
         start = time.time()            
-        image_inv, x_t, worst_mask, vis, worst_iou = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,boxes=boxes, points=points,label_masks_256=label_masks_256)    
+        image_inv, x_t, worst_mask, vis, worst_iou, iou_list = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,boxes=boxes, points=points,label_masks_256=label_masks_256)    
         print('Grad Time:', time.time() - start)
         
         # show 
@@ -975,4 +986,6 @@ if __name__ == '__main__':
         
         # record adversarial iou
         with open(save_path+'/record/'+name+'.txt','w') as f:
-            f.write(str(worst_iou))
+            for i, iou in enumerate(iou_list): 
+                f.write(str(i) + ': ' + str(iou)+'\n')
+            f.write('worst iou: ' + str(worst_iou) + '  iter: ' + str(iou_list.index(worst_iou)))

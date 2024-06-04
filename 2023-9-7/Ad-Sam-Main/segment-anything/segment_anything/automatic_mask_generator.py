@@ -202,6 +202,8 @@ class SamAutomaticMaskGenerator:
 
         # Iterate over image crops
         data = MaskData()
+        #print(len(crop_boxes))
+        
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
             crop_data = self._process_crop(image, crop_box, layer_idx, orig_size)
             data.cat(crop_data)
@@ -233,6 +235,7 @@ class SamAutomaticMaskGenerator:
         x0, y0, x1, y1 = crop_box
         cropped_im = image[y0:y1, x0:x1, :]
         cropped_im_size = cropped_im.shape[:2]
+        print(cropped_im.shape)
         self.predictor.set_image(cropped_im)
 
         # Get points for this crop
@@ -275,6 +278,7 @@ class SamAutomaticMaskGenerator:
         # Run model on this batch
         transformed_points = self.predictor.transform.apply_coords(points, im_size)
         in_points = torch.as_tensor(transformed_points, device=self.predictor.device)
+        print(in_points.shape)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self.predictor.predict_torch(
             in_points[:, None, :],

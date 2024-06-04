@@ -729,15 +729,18 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             if visualize:
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
                 imgs_ii = imgs[0].astype(dtype=np.uint8)
-    
+                #print(imgs_ii.shape)
+                cv2.imwrite(save_base+'_im.jpg',imgs_ii[:,:,::-1])
                 if args.prompt_type=='box':
                     show_anns(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
                 elif args.prompt_type=='point':
                     show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
             
+            ## bug to fix
             if args.visualize2:
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
                 imgs_ii = imgs[0].astype(dtype=np.uint8)
+                
                 if args.prompt_type=='box':
                     show_anns2(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
                 elif args.prompt_type=='point':
@@ -1121,7 +1124,7 @@ if __name__ == "__main__":
         for train_dataset in args.train_datasets:
             args.output += train_dataset.replace('dataset_','')
             args.output += '-'
-        args.output += str(args.train_img_num) + '-' + args.model_type
+        args.output += args.model_type + '-' + str(args.train_img_num) 
         
     elif args.baseline: 
         if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
