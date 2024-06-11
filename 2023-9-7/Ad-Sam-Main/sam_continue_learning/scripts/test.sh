@@ -1,6 +1,6 @@
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-<<<<<<< HEAD
-python -m torch.distributed.run --nproc_per_node=8 --master_port=30005  main.py \
+
+python -m torch.distributed.run --nproc_per_node=8 --master_port=30005  sam_tuning.py \
     --model-type vit_b \
     --output_prefix sam-baseline \
     --batch_size_train=8 \
@@ -9,34 +9,24 @@ python -m torch.distributed.run --nproc_per_node=8 --master_port=30005  main.py 
     --find_unused_params \
     --numworkers=0 \
     --eval \
-    --prompt_type box \
+    --prompt_type point \
     --train-datasets dataset_sa000000 \
-    --valid-datasets dataset_hrsod_val \
-    --restore-model work_dirs/asam-now/epoch_11*.pth \
-    --multimask_output \
-    --mask_id 0 \
+    --valid-datasets dataset_hrsod_val dataset_camo \
+    --restore-sam-model work_dirs/sam-entire_tuning-sa000000-vit_b-11186/epoch_19.pth \
+    --mask_id 2 \
+    --baseline \
+    --multimask_output
 
+# --multimask_output
+#--multimask_output \
+#--baseline \
 #--baseline
 # --baseline
 # --restore-sam-model work_dirs/sam-entire_tuning-sa000000-vit_b-11186/epoch_19.pth \
 # --baseline \
 # --visualize
 #--restore-model work_dirs/sam-token_tuning-sa000000-vit_b-11186/epoch_11.pth
-=======
-python -m torch.distributed.run --nproc_per_node=4 --master_port=30005  main.py \
---model-type vit_b \
---output_prefix sam-baseline \
---batch_size_train=8 \
---batch_size_prompt=8 \
---batch_size_prompt_start=0 \
---find_unused_params \
---numworkers=0 \
---eval \
---prompt_type box \
---train-datasets dataset_sa000000 \
---valid-datasets dataset_hrsod_val \
---restore-model work_dirs/sam-token_tuning-sa000000-vit_b-11186/epoch_11.pth
->>>>>>> e348f52c261efb8f3b92d65c15ac79d09d108456
+
 #--restore-sam-model work_dirs/sam-entire_tuning-sa000000-vit_b-11186/epoch_19.pth \
 #--baseline
 # --visualize \

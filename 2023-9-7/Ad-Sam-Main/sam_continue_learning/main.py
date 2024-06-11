@@ -369,9 +369,12 @@ def main(train_datasets, valid_datasets, args):
         print("--- create training dataloader ---")
         train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train", limit=args.train_img_num)
         train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
+                                                        # my_transforms = [
+                                                        #             RandomHFlip(),
+                                                        #             LargeScaleJitter()
+                                                        #             ],
                                                         my_transforms = [
-                                                                    RandomHFlip(),
-                                                                    LargeScaleJitter()
+                                                                        Resize(args.input_size)
                                                                     ],
                                                         batch_size = args.batch_size_train,
                                                         batch_size_prompt = args.batch_size_prompt,

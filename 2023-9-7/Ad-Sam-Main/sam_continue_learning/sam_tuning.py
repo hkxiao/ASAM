@@ -322,6 +322,9 @@ def get_args_parser():
                         help="Path to the directory where masks and checkpoints will be output")
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--model_save_fre', default=1, type=int)
+    parser.add_argument('--multimask_output', action='store_true')
+    parser.add_argument('--mask_id', default=0, type=int)
+
     return parser.parse_args()
 
 
@@ -575,6 +578,7 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
     test_stats = {}
     dataset_id = -1
     
+    iou_head_prediction, prompt_nums = 0, 0
     for k in range(len(valid_dataloaders)):
         dataset_id += 1
         bad_examples = 0
@@ -634,7 +638,7 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
             batched_input.append(dict_input)
             
             with torch.no_grad():            
-                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
+                batched_output, interm_embeddings = sam(batched_input, multimask_output=args.multimask_output)
 
             batch_len = len(batched_output)
             encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
@@ -643,8 +647,16 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
             dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
             
             masks = torch.empty(0,1,256,256).cuda()
+            
             for output in batched_output:
-                masks = torch.concat([masks, output['low_res_logits']])
+                if not args.multimask_output:
+                    masks = torch.concat([masks, output['low_res_logits']])
+                    iou_head_prediction += output['iou_predictions'].sum()
+                    prompt_nums += torch.numel(output['iou_predictions'])
+                else:
+                    masks = torch.concat([masks, output['low_res_logits'][:,args.mask_id:args.mask_id+1,:,:]])
+                    iou_head_prediction += output['iou_predictions'][:,args.mask_id:args.mask_id+1].sum()
+                    prompt_nums += torch.numel(output['iou_predictions'][:,args.mask_id:args.mask_id+1])
             
             # print(torch.max(masks))
             # print(masks.shape,labels_ori.shape)
@@ -691,12 +703,21 @@ def evaluate(args,  sam, valid_dataloaders, visualize=False):
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
-        
+
+        if args.multimask_output:                
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
+        else:
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction/prompt_nums) +'\n') 
+            
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
             with open(args.output+'/log.txt','a') as f:
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
+                if args.multimask_output:                
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
+                else:
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction/prompt_nums) +'\n') 
 
     return test_stats
 
@@ -726,6 +747,13 @@ if __name__ == "__main__":
     dataset_sa000000 = {"name": "sam_subset",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+
+    dataset_sa000001 = {"name": "sam_subset",
+        "im_dir": "../sam-1b/sa_000001",
+        "gt_dir": "../sam-1b/sa_000001",
         "im_ext": ".jpg",
         "gt_ext": ""
     }
@@ -1055,8 +1083,13 @@ if __name__ == "__main__":
     
     
     args = get_args_parser()
-    if not args.eval:
-        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.train_datasets[0].split('_')[-1]+'-'+args.model_type+'-'+str(args.train_img_num))
+    if not args.eval:   
+        args.output = os.path.join('work_dirs', args.output_prefix+'-')
+        for train_dataset in args.train_datasets:
+            args.output += train_dataset.replace('dataset_','')
+            args.output += '-'
+        args.output += args.model_type + '-' + str(args.train_img_num)    
+   
     elif args.baseline: 
         if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
         else: args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
