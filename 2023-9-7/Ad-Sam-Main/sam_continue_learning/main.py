@@ -517,7 +517,7 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
             sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
             dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
 
-            masks = net(
+            masks,_ = net(
                 image_embeddings=encoder_embedding,
                 image_pe=image_pe,
                 sparse_prompt_embeddings=sparse_embeddings,
