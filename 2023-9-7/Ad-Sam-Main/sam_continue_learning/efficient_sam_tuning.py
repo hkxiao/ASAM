@@ -325,6 +325,8 @@ def get_args_parser():
                         help="Path to the directory where masks and checkpoints will be output")
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--model_save_fre', default=1, type=int)
+    parser.add_argument('--train_mask_id', default='best', type=str)
+    parser.add_argument('--test_mask_id', default='best', type=str)
     return parser.parse_args()
 
 
@@ -476,22 +478,25 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 multimask_output=True
             )
             
-            sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
-            predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
-            predicted_logits = torch.take_along_dim(
-                predicted_logits, sorted_ids[..., None, None], dim=2
-            )
+            if args.train_mask_id == 'best' or args.test_mask_id=='all':
+                sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
+                predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
+                predicted_logits = torch.take_along_dim(
+                    predicted_logits, sorted_ids[..., None, None], dim=2
+                )
 
-            masks_0 = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
-            masks_1 = predicted_logits[:,:,1,...].view(K*N,1,1024,1024)
-            masks_2 = predicted_logits[:,:,2,...].view(K*N,1,1024,1024)
+                masks_0 = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
+                masks_1 = predicted_logits[:,:,1,...].view(K*N,1,1024,1024)
+                masks_2 = predicted_logits[:,:,2,...].view(K*N,1,1024,1024)
             
-            loss_mask_0, loss_dice_0 = loss_masks(masks_0, labels.unsqueeze(1)/255.0, len(masks_0))
-            loss_mask_1, loss_dice_1 = loss_masks(masks_1, labels.unsqueeze(1)/255.0, len(masks_1))
-            loss_mask_2, loss_dice_2 = loss_masks(masks_2, labels.unsqueeze(1)/255.0, len(masks_2))
-            loss_mask = loss_mask_0 + loss_mask_1 + loss_mask_2
-            loss_dice = loss_dice_0 + loss_dice_1 + loss_dice_2
-            loss =  loss_mask*args.alpha + loss_dice*args.beta
+                loss_mask_0, loss_dice_0 = loss_masks(masks_0, labels.unsqueeze(1)/255.0, len(masks_0))
+                loss_mask_1, loss_dice_1 = loss_masks(masks_1, labels.unsqueeze(1)/255.0, len(masks_1))
+                loss_mask_2, loss_dice_2 = loss_masks(masks_2, labels.unsqueeze(1)/255.0, len(masks_2))
+                
+                if args.train_mask_id == 'best':
+                    loss_mask = loss_mask_0
+                    loss_dice = loss_dice_0
+                loss =  loss_mask*args.alpha + loss_dice*args.beta
 
             loss_dict = {"loss_mask": loss_mask*args.alpha, "loss_dice":loss_dice*args.beta}
 
@@ -612,13 +617,14 @@ def evaluate(args, net, valid_dataloaders, visualize=False):
                 multimask_output=True
             )
             
-            sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
-            predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
-            predicted_logits = torch.take_along_dim(
-                predicted_logits, sorted_ids[..., None, None], dim=2
-            )
+            if args.test_mask_id == 'best':
+                sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)
+                predicted_iou = torch.take_along_dim(predicted_iou, sorted_ids, dim=2)
+                predicted_logits = torch.take_along_dim(
+                    predicted_logits, sorted_ids[..., None, None], dim=2
+                )
 
-            masks = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
+                masks = predicted_logits[:,:,0,...].view(K*N,1,1024,1024)
             
             try:
                 iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
@@ -1023,7 +1029,8 @@ if __name__ == "__main__":
             args.output += train_dataset.replace('dataset_','')
             args.output += '-'
         args.output += str(args.train_img_num) + '-' + args.model_type
-        args.output += '-' + str(args.alpha) + '-' + str(args.beta) + '-' + str(args.learning_rate) + '-' + str(args.warmup_epoch) + '-' + str(args.max_epoch_num)
+        args.output += '-bce_weight:' + str(args.alpha) + '-dice_weight:' + str(args.beta) + '-lr:' + str(args.learning_rate) + '-warmup:' + str(args.warmup_epoch) + '-epoch:' + str(args.max_epoch_num)
+        args.output += '-train_mask_id:' + str(args.train_mask_id) + '-test_mask_id:' + str(args.test_mask_id)
     elif 'pretrained_checkpoint' in args.restore_model:
         args.output = os.path.join('work_dirs',args.output_prefix)
     elif args.restore_model:
