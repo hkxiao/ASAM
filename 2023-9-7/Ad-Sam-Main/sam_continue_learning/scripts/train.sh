@@ -7,7 +7,7 @@ python -m torch.distributed.run --nproc_per_node=8 --master_port=30011  main.py 
     --batch_size_prompt_start=0 \
     --find_unused_params \
     --numworkers=0 \
-    --learning_rate=3e-6 \
+    --learning_rate=3e-2 \
     --train-datasets dataset_sa000000 \
     --valid-datasets dataset_hrsod_val dataset_coco2017_val \
     --slow_start \
