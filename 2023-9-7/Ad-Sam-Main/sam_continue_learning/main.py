@@ -379,7 +379,15 @@ def get_args_parser():
     parser.add_argument('--mask_id', default=0, type=int)
     return parser.parse_args()
 
-
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(seed)
+    random.seed(seed)
+    
 def main(train_datasets, valid_datasets, args):
     ### --- Step 0: Initialize ---
     misc.init_distributed_mode(args)
@@ -394,12 +402,8 @@ def main(train_datasets, valid_datasets, args):
             f.write('\n\n\n=========>> '+str(datetime.now())+'\n')
             f.write(str(args)+'\n')
             
-    seed = args.seed
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    
+    setup_seed(args.seed + args.local_rank)
+
     ### --- Step 1: Train or Valid dataset ---
     if not args.eval:
         print("--- create training dataloader ---")
@@ -683,7 +687,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 inputs_val = inputs_val.cuda()
                 labels_val = labels_val.reshape(K*N,H,W).cuda() #K*N 1024 1024 
                 labels_ori = labels_ori.reshape(k*n,h,w).cuda()
-            
+                        
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
             
             if args.eval_prompt_type=='boxes': 
@@ -691,7 +695,9 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             if args.eval_prompt_type=='points':        
                 try: labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
                 except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
-                    
+            
+            print(args.local_rank, ori_im_path[0].split('/')[-1] ,torch.max(labels_points))
+            
             batched_input = []
             dict_input = dict()
             

@@ -97,6 +97,8 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
             if 'DRAM' not in datasets[i]["name"]:
                 tmp_im_list = [x for x in tmp_im_list if os.path.exists(x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]))]
         
+        tmp_im_list, tmp_gt_list = sorted(tmp_im_list), sorted(tmp_gt_list)
+        
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
 
