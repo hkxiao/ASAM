@@ -20,7 +20,15 @@ from utils.loss_mask import loss_masks
 import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR, StepLR
 from pathlib import Path
+import sys
 
+
+def print_current_line(current_frame):
+    # 获取当前行号
+    line_number = current_frame.f_lineno
+    # 打印当前行号
+    print(f"当前错误的行号是: {line_number}")
+    
 def lr_lambda(epoch):
     if epoch < args.warmup_epoch:
         return (epoch + 1) / args.warmup_epoch  # warm up 阶段线性增加
@@ -244,13 +252,19 @@ def show_anns2(labels_val, masks, input_point, input_box, input_label, filename,
 
 
 def record_iou(filename, ious, boundary_ious):
-    if len(ious) == 0:
-        return
+    if len(ious) == 0: return
 
     for i, (iou, biou) in enumerate(zip(ious, boundary_ious)):
         with open(filename+'_'+str(i)+'.txt','w') as f:
             f.write(str(round(iou.item()*100,2)))
-        
+  
+def record_stability(filename, stabilitys):
+    if len(stabilitys) == 0: return
+
+    for i, iou in enumerate(stabilitys):
+        with open(filename+'_'+str(i)+'_stability.txt','w') as f:
+            f.write(str(round(iou.item()*100,2)))
+            
 def show_points(coords, labels, ax, marker_size=175):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
@@ -273,6 +287,21 @@ def show_box(box, ax):
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
 
+def compute_stability_refer_StableSAM(masks, labels_ori):
+    N, H, W = labels_ori.shape
+    groups = masks.shape[0] // N
+    
+    masks_binary =  (masks > 0).to(torch.float32) 
+    # print(masks_binary.shape, labels_ori.shape)
+    # import pdb; pdb.set_trace()
+    masks_binary = masks_binary.view(groups, N, *masks_binary.shape[-2:])
+    masks_union = torch.any(masks_binary,dim=0,keepdim=True).expand(groups,-1,-1,-1).contiguous().view(groups*N,1,*masks.shape[-2:]).to(torch.float32)*255.0
+    stability, stability_list = compute_iou(masks, masks_union)
+
+    stability_list = [sum(stability_list[i::groups]) for i in range(N)]
+    
+    #print(stability)
+    return stability, stability_list
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Tune-SAM', add_help=False)
@@ -321,9 +350,16 @@ def get_args_parser():
     parser.add_argument('--batch_size_prompt', default=-1, type=int)
     parser.add_argument('--train_img_num', default=11186, type=int)
     parser.add_argument('--batch_size_valid', default=1, type=int)
-    parser.add_argument('--prompt_type', default='box')
+    parser.add_argument('--eval_prompt_type', default='boxes')
+    parser.add_argument('--train_prompt_type', default='boxes_points')
     parser.add_argument('--point_num', type=int, default=10)
     
+    # Prompt Stability Setting    
+    parser.add_argument('--eval_stability', action='store_true')
+    parser.add_argument('--stable_iter', default=10, type=int)
+    parser.add_argument('--boxes_noise_scale', default=0.2, type=float)
+    parser.add_argument('--points_noise_scale', default=0.2, type=float)
+
     # DDP Setting
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
@@ -358,7 +394,7 @@ def main(train_datasets, valid_datasets, args):
             f.write('\n\n\n=========>> '+str(datetime.now())+'\n')
             f.write(str(args)+'\n')
             
-    seed = args.seed + misc.get_rank()
+    seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -499,9 +535,6 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
                     point_coords = labels_points[sparse_slice,...] # N 10 2
                     dict_input['point_coords'] = point_coords
                     dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
-                elif input_type == 'noise_mask':
-                    dict_input['mask_inputs'] = labels_noisemask[dense_slice] # N 1 256 256
-
                 else:
                     raise NotImplementedError
 
@@ -613,6 +646,14 @@ def compute_boundary_iou(preds, target):
         iou_list.append(single_iou)
     return iou / len(preds), iou_list
 
+def bad_examples_info(bad_examples, metric_logger, k):
+    bad_examples[0] += 1
+    loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
+    if args.eval_stability: loss_dict
+    
+    loss_dict_reduced = misc.reduce_dict(loss_dict)
+    metric_logger.update(**loss_dict_reduced)
+    
 @torch.no_grad()
 def evaluate(args, net, sam, valid_dataloaders, visualize=False):
     net.eval()
@@ -625,7 +666,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
      
     for k in range(len(valid_dataloaders)):
         dataset_id += 1
-        bad_examples = 0
+        bad_examples = [0]
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
@@ -636,13 +677,8 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             K,N,H,W = labels_val.shape
             k,n,h,w = labels_ori.shape
             
-            if n == 0:
-                bad_examples += 1
-                loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
-                loss_dict_reduced = misc.reduce_dict(loss_dict)
-                metric_logger.update(**loss_dict_reduced)
-                continue
-            
+            if n == 0: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
+                
             if torch.cuda.is_available():
                 inputs_val = inputs_val.cuda()
                 labels_val = labels_val.reshape(K*N,H,W).cuda() #K*N 1024 1024 
@@ -650,37 +686,35 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             
             imgs = inputs_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
             
-            if args.prompt_type=='box': 
+            if args.eval_prompt_type=='boxes': 
                 labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
-            if args.prompt_type=='point':        
-                try:
-                    labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
-                except:
-                    bad_examples+=1
-                    loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
-                    loss_dict_reduced = misc.reduce_dict(loss_dict)
-                    metric_logger.update(**loss_dict_reduced)
-                    continue
+            if args.eval_prompt_type=='points':        
+                try: labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
+                except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
                     
             batched_input = []
             dict_input = dict()
             
             input_image = torch.as_tensor(imgs[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
             dict_input['image'] = input_image 
-            if args.prompt_type == 'box':
+            if args.eval_prompt_type == 'boxes':
                 dict_input['boxes'] = labels_box #N 4
-            elif args.prompt_type == 'point': 
+            elif args.eval_prompt_type == 'points': 
                 point_coords = labels_points #[N 10 2]
                 dict_input['point_coords'] = point_coords
                 dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
-            elif args.prompt_type == 'noise_mask':
-                dict_input['mask_inputs'] = labels_noisemask[b_i:b_i+1]
             else:
                 raise NotImplementedError
             
+            if args.eval_stability and args.eval_prompt_type == 'boxes':
+                dict_input['boxes'] = torch.cat([dict_input['boxes'],torch.cat([misc.box_noise(dict_input['boxes'], args.boxes_noise_scale) for i in range(args.stable_iter)],dim=0)])
+            ## To do
+            if args.eval_stability and args.eval_prompt_type == 'points':
+                dict_input['points'] = torch.cat([add_noise_to_points(dict_input['points'], args.points_noise_scale) for i in range(args.stable_iter)],dim=0)
+        
             dict_input['original_size'] = imgs[0].shape[:2]
             batched_input.append(dict_input)
-            with torch.no_grad():            
+            with torch.cuda.amp.autocast():           
                 batched_output, interm_embeddings = sam(batched_input, multimask_output=args.multimask_output)
 
             batch_len = len(batched_output)
@@ -695,41 +729,39 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                 iou_head_prediction += torch.sum(ious).item()
                 prompt_nums += torch.numel(ious)
             else:
-                masks, ious = net(
-                    image_embeddings=encoder_embedding,
-                    image_pe=image_pe,
-                    sparse_prompt_embeddings=sparse_embeddings,
-                    dense_prompt_embeddings=dense_embeddings,
-                    multimask_output=args.multimask_output,
-                )
+                with torch.cuda.amp.autocast():
+                    masks, ious = net(
+                        image_embeddings=encoder_embedding,
+                        image_pe=image_pe,
+                        sparse_prompt_embeddings=sparse_embeddings,
+                        dense_prompt_embeddings=dense_embeddings,
+                        multimask_output=args.multimask_output,
+                    )
+                print(masks.shape)
+                #import pdb; pdb.set_trace()
                 if args.multimask_output: 
                     ious = ious[:,args.mask_id:args.mask_id+1]
                     masks = masks[:,args.mask_id:args.mask_id+1,:,:]
                 masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
                 iou_head_prediction += torch.sum(ious).item()
                 prompt_nums += torch.numel(ious)
-                
-            try:
-                iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
-                boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
-            except:
-                bad_examples += 1
-                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
-                loss_dict_reduced = misc.reduce_dict(loss_dict)
-                metric_logger.update(**loss_dict_reduced)
-                continue
             
-            if torch.isnan(iou).any() or torch.isnan(boundary_iou).any():
-                bad_examples += 1
-                loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): torch.tensor(0.5).cuda()}
-                loss_dict_reduced = misc.reduce_dict(loss_dict)
-                metric_logger.update(**loss_dict_reduced)
-                continue    
+            if args.eval_stability: stability,stability_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
+            
+            try:
+                iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
+                boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
                 
-            if args.prompt_type =='box':
-                save_dir = os.path.join(args.output, args.prompt_type, valid_datasets[dataset_id]['name'])
-            else:
-                save_dir = os.path.join(args.output, args.prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
+                if args.eval_stability: stability,stability_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
+                    
+            except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
+            
+            if torch.isnan(iou).any() or torch.isnan(boundary_iou).any(): bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
+
+            if args.eval_prompt_type =='boxes':
+                save_dir = os.path.join(args.output, args.eval_prompt_type, valid_datasets[dataset_id]['name'])
+            if args.eval_prompt_type =='points':
+                save_dir = os.path.join(args.output, args.eval_prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
             
             Path(save_dir).mkdir(parents=True,exist_ok=True)
             
@@ -737,7 +769,10 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
             index = base[::-1].index('.')
             base = base[:-index-1]
             save_base = os.path.join(save_dir, str(base))
+            
             record_iou(save_base, iou_list, boundary_iou_list)
+            if args.eval_stability: record_stability(save_base, stability_list)
+            
             if visualize:
                 masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
                 imgs_ii = imgs[0].astype(dtype=np.uint8)
@@ -759,9 +794,10 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
                     show_anns2(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
             
             loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
+            if args.eval_stability: loss_dict['val_stability_'+str(valid_datasets[dataset_id]['name'])] = stability
+            
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
-        
         
         print('============================')
         # gather the stats from all processes
@@ -769,7 +805,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         print("Averaged stats:", metric_logger)
         resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
         test_stats.update(resstat)
-        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') )
+        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
         
         if args.multimask_output:                
             print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
@@ -779,8 +815,8 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
             with open(args.output+'/log.txt','a') as f:
-                f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')    
-                f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples) +'\n') 
+                f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
+                f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
                 if args.multimask_output:                
                     f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction/prompt_nums) +'\n') 
                 else:

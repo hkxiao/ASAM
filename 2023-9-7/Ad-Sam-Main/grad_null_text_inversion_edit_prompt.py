@@ -45,6 +45,7 @@ parser.add_argument('--alpha', type=float, default=0.01, help='cnn')
 parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--alpha_boxes', type=float, default=0.01, help='cnn')
 parser.add_argument('--eps_boxes', type=float, default=0.2, help='cnn')
+parser.add_argument('--boxes_noise_scale', type=float, default=0.1, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--mu', default=0.5, type=float, help='random seed')
 
@@ -62,6 +63,7 @@ parser.add_argument('--seed', default=0, type=int, help='random seed')
 parser.add_argument('--check_controlnet', action='store_true')
 parser.add_argument('--check_inversion', action='store_true')
 parser.add_argument('--debug', action='store_true')
+parser.add_argument('--show_all_masks', action='store_true')
 
 # path setting
 parser.add_argument('--prefix', type=str, default='', help='cnn')
@@ -75,7 +77,7 @@ parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa
 # prompt setting 
 parser.add_argument('--prompt_bs', type=int, default=150, help='cnn')
 parser.add_argument('--prompt_type', type=str, default='box', help='cnn')
-parser.add_argument('--prompt_num', type=int, default=10, help='cnn')
+parser.add_argument('--point_num', type=int, default=10, help='cnn')
 
 args = parser.parse_args()
 print(args)
@@ -195,7 +197,8 @@ def masks_sample_points(masks,k=10):
         samples_y = y_idx[idx]
         samples_xy = torch.cat((samples_x[:,None],samples_y[:,None]),dim=1)
         samples.append(samples_xy)
-
+        #print(samples_xy.shape,b_i)
+        
     samples = torch.stack(samples)
     return samples
 
@@ -642,6 +645,7 @@ def text2image_ldm_stable_last(
     label_masks_256=None,
     mask_control=None,
     raw_img=None,
+    raw_img_norm=None,
     attack_object='img',
 ): 
     
@@ -667,19 +671,19 @@ def text2image_ldm_stable_last(
         uncond_embeddings_ = None
 
     latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)    
-    model.scheduler.set_timesteps(num_inference_steps)
-    best_latent = latents
+    model.scheduler.set_timesteps(num_inference_steps if num_inference_steps>0 else 1)
+    best_img = raw_img
     ori_latents = latents.clone().detach()
     adv_latents = latents.clone().detach()
     momentum = 0
-    worst_iou, iou_list = 1.0, []
-    worst_mask = None
     
     best_boxes = boxes
     ori_boxes = boxes.clone().detach()
     adv_boxes = boxes.clone().detach()
     momentum_boxes = 0
     
+    worst_iou, iou_list = 1.0, []
+    worst_mask =  F.interpolate(label_masks_256.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False) / 255.0
     
     for k in range(args.steps):
         latents = adv_latents
@@ -701,6 +705,10 @@ def text2image_ldm_stable_last(
             image = (image / 2 + 0.5)
             #print(4, image.max(), image.min())
             image = limitation01(image)
+            if args.ddim_steps<=0: 
+                print("using raw image!")
+                image = raw_img
+            
             image_m = F.interpolate(image, image_size)
             #print(1, image_m.max(), image_m.min())
             
@@ -710,14 +718,13 @@ def text2image_ldm_stable_last(
                 example = {}
                 example['image'] = image_m[0]*255.0
                 if args.prompt_type == 'box': example['boxes'] = adv_boxes
-                else: example['point_coords'] = points
-                
-                example['point_labels'] = torch.ones(points.shape[:-1])
-                
+                else: 
+                    example['point_coords'] = points
+                    example['point_labels'] = torch.ones(points.shape[:-1])
+
                 example['original_size'] = image_size
                 output, interbeddings = net([example], multimask_output=False)
                 output = output[0]
-                
                 # print(example['image'].dtype, example['boxes'].dtype)
                 ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
                 
@@ -738,29 +745,33 @@ def text2image_ldm_stable_last(
                 ad_low_res_logits = F.interpolate(predicted_logits[0,:,:1,:,:],(256,256),mode='bilinear',align_corners=False)
                 ad_masks = torch.ge(ad_low_res_logits,0)
 
-            print(ad_low_res_logits.shape, label_masks_256.shape)
+            # print(ad_low_res_logits.shape, label_masks_256.shape)
             loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
             loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
 
             iou = compute_iou(ad_low_res_logits, label_masks_256).item()
             print("iou:",iou)
             iou_list.append(iou)
-            if iou < worst_iou:                
-                best_latent, worst_iou, worst_mask  = adv_latents, iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False)
-                    
+            
+            if iou < worst_iou and args.attack_object=='img':                
+                best_img, worst_iou, worst_mask = image.detach(), iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False).detach()
+            if iou < worst_iou and args.attack_object=='boxes':                
+                best_boxes, worst_iou, worst_mask = adv_boxes.detach(), iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False).detach()
+
             image_m = image_m - mean[None,:,None,None]
             image_m = image_m / std[None,:,None,None]
-            loss_mse =  args.beta * torch.norm(image_m-raw_img, p=args.norm).mean()  # **2 / 50
+            loss_mse =  args.beta * torch.norm(image_m-raw_img_norm, p=args.norm).mean()  # **2 / 50
             
             loss = loss_dice + loss_ce - loss_mse
             loss.backward()
             print('*' * 50)
             print('Loss', loss.item(), 'Loss_dice', loss_dice.item(),'Loss_ce', loss_ce.item(), 'Loss_mse', loss_mse.item())
             print(k, 'Predicted:', loss)
-            print('Grad:', latents_last.grad.min(), latents_last.grad.max())
-            # print(latent.min(), latent.max())
+        
         
         if attack_object == 'img':
+            print('Latent Grad:', latents_last.grad.min(), latents_last.grad.max())
+            # print(latent.min(), latent.max())
             l1_grad = latents_last.grad / torch.norm(latents_last.grad, p=1)
             print('Img L1 Grad:', l1_grad.min(), l1_grad.max())
             momentum = args.mu * momentum + l1_grad
@@ -768,66 +779,58 @@ def text2image_ldm_stable_last(
             noise = (adv_latents - ori_latents).clamp(-args.eps, args.eps)
             adv_latents = ori_latents + noise
             latents = adv_latents.detach()
-        elif attack_object == 'prompt':
+        elif attack_object == 'boxes':
+            print('Boxes Grad:', adv_boxes.grad.min(), adv_boxes.grad.max())
             l1_grad = adv_boxes.grad / torch.norm(adv_boxes.grad, p=1)
             print('Box L1 Grad:', l1_grad.min(), l1_grad.max())
             momentum_boxes = args.mu * momentum + l1_grad
-            adv_boxes = adv_boxes + torch.sign(momentum_boxes) * args.alpha_boxes
+            adv_boxes = adv_boxes + torch.sign(momentum_boxes) * args.alpha_boxes # [bs_prompt,]
+
+            ori_box_w, ori_box_h = ori_boxes[:,2]-ori_boxes[:,0], ori_boxes[:,3]-ori_boxes[:,1]
+            
             noise = (adv_boxes - ori_boxes).clamp(-args.eps_boxes, args.eps_boxes)
+            #import pdb; pdb.set_trace()
+            noise[:,0::2], noise[:,1::2] = noise[:,0::2].clamp(-1*ori_box_w.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale, ori_box_w.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale*1), \
+                noise[:,1::2].clamp(-1*ori_box_h.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale, ori_box_h.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale)
+                        
             adv_boxes = ori_boxes + noise
-            adv_boxes = adv_boxes.detach()
+            adv_boxes = adv_boxes.detach().clamp(0,1023)
 
-    # Return Best Attack
-    latents = best_latent
-    for i, t in enumerate(model.scheduler.timesteps[-start_time:]):
-        if uncond_embeddings_ is None:
-            context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
-        else:
-            context = torch.cat([uncond_embeddings_, text_embeddings])
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control,context, t, guidance_scale, low_resource=False)
-        
-    latents = (1 / 0.18215 * latents)
-    image = model.vae.decode(latents)['sample']
-    image = (image / 2 + 0.5)
-    #print(4, image.max(), image.min())
-    image = limitation01(image)
-    print(2, image.max(), image.min())
-
-    image = image.clamp(0, 1).detach().cpu().permute(0, 2, 3, 1).numpy()
+    ## show worst result
+    image = best_img.detach().cpu().permute(0, 2, 3, 1).numpy()
     image = (image * 255).astype(np.uint8)
     worst_mask_show = np.zeros((512,512,3))
     fig, ax = plt.subplots(figsize=(5.12, 5.12))
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0,wspace=0)
     ax.axis('off')
     plt.imshow(image[0]/255)
-    
-    if args.steps:
-        num = origin_len
-        length = 1<<24
-        worst_mask = torch.concat([worst_mask,sup_masks/255])
-        for i, single_mask in enumerate(worst_mask):
-            single_mask = single_mask[0].cpu().numpy()
-            pos = int((length-1) *(i+1) / num)
-            color = np.array((pos%256, pos//256%256, pos//(1<<16)))
-            worst_mask_show[single_mask!=0] = color
-            
-            if i < args.prompt_bs:
-                if args.prompt_type == 'box':
-                    box= tuple((adv_boxes[i].cpu().numpy()/2).tolist())        
-                    show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
-                else:
-                    point = (points[i].cpu().numpy()/2).tolist()
-                    show_points(point, labels=[1]*args.prompt_num, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256),marker_size=100)
-                                  
-            show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
         
+    num = origin_len
+    length = 1<<24
+    if args.show_all_masks == True: worst_mask = torch.concat([worst_mask,sup_masks/255])
     
+    for i, single_mask in enumerate(worst_mask):
+        single_mask = single_mask[0].cpu().numpy()
+        pos = int((length-1) *(i+1) / num)
+        color = np.array((pos%256, pos//256%256, pos//(1<<16)))
+        worst_mask_show[single_mask!=0] = color
+        
+        if i < args.prompt_bs:
+            if args.prompt_type == 'box':
+                box= tuple((adv_boxes[i].cpu().numpy()/2).tolist())        
+                show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
+            else:
+                point = (points[i].cpu().numpy()/2).tolist()
+                show_points(point, labels=[1]*args.point_num, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256),marker_size=100)
+                            
+        show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
+        
     fig.canvas.draw()
     data = fig.canvas.tostring_rgb()
     width, height = fig.canvas.get_width_height()
     vis = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3))
     
-    return image, best_latent, worst_mask_show, vis, worst_iou, iou_list
+    return image, best_boxes, worst_mask_show, vis, worst_iou, iou_list, 
 
 def check_controlnet():
     id = 2    
@@ -903,8 +906,9 @@ if __name__ == '__main__':
     # Prepare save path
     save_path = args.save_root + '/' 
     if args.prefix != "": save_path += args.prefix + '-'
-    save_path += 'Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) + '-AttackObject-' + str(args.attack_object) + '-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_bs) + '-' + str(args.prompt_type) + '-' + str(args.prompt_num) + \
-        '-Loss-' + str(args.kappa) +'-'+ str(args.gamma) +'-'+ str(args.eta) + '-' + str(args.beta) + '-' + str(args.norm) + '-Perturbation-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu)
+    save_path += 'Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) + '-AttackObject-' + str(args.attack_object) + '-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_bs) + '-' + str(args.prompt_type) + '-' + str(args.point_num) + \
+        '-Loss-' + str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) + '-Perturbation_Img-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu) + \
+        '-Perturbation_Boxes-' + str(args.eps_boxes) + '-' +str(args.steps)  + '-' + str(args.alpha_boxes) + '-' + str(args.mu) + '-' + str(args.boxes_noise_scale)
     
     if args.random_latent:
         save_path += '-random_latent'
@@ -916,18 +920,20 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(save_path,'adv')): os.mkdir(os.path.join(save_path,'adv'))
     if not os.path.exists(os.path.join(save_path,'record')): os.mkdir(os.path.join(save_path,'record'))
     
-    names = sorted(os.listdir(args.data_root))
-    names = [name[:-4] for name in names if '.jpg' in name]
-    if args.end != -1:
-        names = names[args.start:args.end+1]
-    else:
-        names = names[args.start:]
-        
-    print(names)    
     # Adversarial optimization loop
-    for name in tqdm(names):
+    # names = sorted(os.listdir(args.data_root))
+    # names = [name[:-4] for name in names if '.jpg' in name]
+    # if args.end != -1:
+    #     names = names[args.start:args.end+1]
+    # else:
+    #     names = names[args.start:]
         
-        # prepare img & mask path
+    # print(names)    
+    # for name in tqdm(names):
+    #     # prepare img & mask path
+    
+    for i in range(args.start, args.end):
+        name = 'sa_' + str(i)
         img_path = args.data_root+'/'+name+'.jpg'
         control_mask_path = args.control_mask_dir+'/'+name+'.png'
         label_mask_dir = args.data_root+'/'+name
@@ -936,16 +942,16 @@ if __name__ == '__main__':
             print(img_path, "does not exist!")
             continue
         
-        if os.path.exists(os.path.join(save_path, 'adv', name+'.png')) and not args.debug:
-            print(os.path.join(save_path, 'adv', name+'.png'), " has existed!")
-            #continue
+        if os.path.exists(os.path.join(save_path, 'adv', name+'.jpg')) and not args.debug:
+            print(os.path.join(save_path, 'adv', name+'.jpg'), " has existed!")
+            continue
         
         # load raw img for mse loss [1,3,512,512] [0,1]
         pil_image = Image.open(img_path).convert('RGB').resize(image_size)
         raw_img_show = np.array(pil_image.resize((512,512)))
-        raw_img = (torch.tensor(np.array(pil_image).astype(np.float32), device=device).unsqueeze(0)/255.).permute(0,3, 1, 2)
-        raw_img = raw_img - mean[None,:,None,None]
-        raw_img = raw_img / std[None,:,None,None]
+        raw_img = (torch.tensor(np.array(pil_image.resize((512,512))).astype(np.float32), device=device).unsqueeze(0)/255.).permute(0,3,1,2)
+        raw_img_norm = F.interpolate(raw_img,image_size,align_corners=False,mode='bilinear') - mean[None,:,None,None]
+        raw_img_norm = raw_img_norm / std[None,:,None,None]
         
         # load mask labels & boxes prompt & point prompt
         global origin_len
@@ -957,10 +963,9 @@ if __name__ == '__main__':
             label_mask_torch = torch.tensor(np.array(label_mask)).cuda().to(torch.float32)
             label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
         boxes = masks_to_boxes(label_masks.squeeze())
-        points = masks_sample_points(label_masks.squeeze(), k=args.prompt_num)
-    
+        points = masks_sample_points(label_masks.squeeze(1), k=args.point_num)
         label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
-            
+        
         # load sup mask for show
         sup_masks = torch.empty([0,1,512,512]).cuda()
         for j in range(min(args.prompt_bs,origin_len),origin_len):
@@ -998,15 +1003,21 @@ if __name__ == '__main__':
         # adversarial optimization
         controller = AttentionStore()
         start = time.time()            
-        image_inv, x_t, worst_mask, vis, worst_iou, iou_list = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,boxes=boxes, points=points,label_masks_256=label_masks_256, attack_object='prompt')    
+        worst_img, worst_boxes, worst_mask, vis, worst_iou, iou_list = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,raw_img_norm=raw_img_norm,boxes=boxes, points=points,label_masks_256=label_masks_256, attack_object=args.attack_object)    
         print('Grad Time:', time.time() - start)
         
         # show 
-        ptp_utils.view_images([image_inv[0]], prefix=os.path.join(save_path,'adv',name))
-        ptp_utils.view_images([raw_img_show, mask_show, image_inv[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair',name), shuffix='.jpg')
+        #import pdb; pdb.set_trace()
+        ptp_utils.view_images([worst_img[0]], prefix=os.path.join(save_path,'adv',name), shuffix='.jpg')
+        ptp_utils.view_images([raw_img_show, mask_show, worst_img[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair',name), shuffix='.jpg')
         
         # record adversarial iou
         with open(save_path+'/record/'+name+'.txt','w') as f:
             for i, iou in enumerate(iou_list): 
                 f.write(str(i) + ': ' + str(iou)+'\n')
-            f.write('worst iou: ' + str(worst_iou) + '  iter: ' + str(iou_list.index(worst_iou)))
+            print(worst_iou)
+            f.write('worst iou: ' + str(worst_iou) + ' worst iter: ' + str(iou_list.index(worst_iou)))
+            
+        # record worst boxes
+        with open(save_path+'/adv/'+name+'_boxes.txt','w') as f:
+            f.write(str(worst_boxes.detach().cpu().numpy().tolist()))

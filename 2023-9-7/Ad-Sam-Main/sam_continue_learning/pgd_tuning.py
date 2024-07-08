@@ -536,7 +536,7 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 batched_input.append(dict_input)
             
             # print(type(batched_input))
-            advinput = pgd_generator(batched_input, labels_256, sam, attack_type='Linf',eps=16, attack_steps=4, attack_lr=4  ,attack_criterion='regular' ,use_best=False,eval_mode=False)
+            advinput = pgd_generator(batched_input, labels_256, sam, attack_type='Linf',eps=16, attack_steps=4, attack_lr=4, attack_criterion='regular' ,use_best=False, eval_mode=False)
             
             if args.only_attack:
                 img_np = advinput[0]['image'].permute(1,2,0).cpu().data.numpy()
