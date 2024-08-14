@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import cv2
 from sam_continue_learning.segment_anything_training import sam_model_registry
 import os
-from sam_continue_learning.efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
+from sam_continue_learning.efficient_sam_training.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
 
 def get_model(model, model_type):
     home_path = 'home_path'

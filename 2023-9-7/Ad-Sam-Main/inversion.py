@@ -36,6 +36,7 @@ parser.add_argument('--check_controlnet', action='store_true')
 parser.add_argument('--check_inversion', action='store_true')
 
 # inversion setting
+parser.add_argument('--inversion_type', type=str, default='null_text_inversion')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')   
 parser.add_argument('--guess_mode', action='store_true')   
@@ -374,8 +375,19 @@ class NullInversion:
         self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
         self.prompt = None
         self.context = None
+        self.num_ddim_steps = NUM_DDIM_STEPS
     
-    def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+    # def prev_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
+    #     prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+    #     alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
+    #     alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
+    #     beta_prod_t = 1 - alpha_prod_t
+    #     pred_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+    #     pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
+    #     prev_sample = alpha_prod_t_prev ** 0.5 * pred_original_sample + pred_sample_direction
+    #     return prev_sample
+
+    def prev_step(self, model_output, timestep: int, sample):
         prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
         alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
         alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
@@ -383,7 +395,12 @@ class NullInversion:
         pred_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
         pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
         prev_sample = alpha_prod_t_prev ** 0.5 * pred_original_sample + pred_sample_direction
-        return prev_sample
+        
+        difference_scale_pred_original_sample= - beta_prod_t ** 0.5  / alpha_prod_t ** 0.5
+        difference_scale_pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 
+        difference_scale = alpha_prod_t_prev ** 0.5 * difference_scale_pred_original_sample + difference_scale_pred_sample_direction
+        
+        return prev_sample,difference_scale
     
     def next_step(self, model_output: Union[torch.FloatTensor, np.ndarray], timestep: int, sample: Union[torch.FloatTensor, np.ndarray]):
         timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
@@ -553,7 +570,370 @@ class NullInversion:
             print("Null-text optimization...")
         uncond_embeddings = self.null_optimization(ddim_latents, mask_control, num_inner_steps, early_stop_epsilon)
         return (image_gt, image_rec), ddim_latents[-1], uncond_embeddings
+
+    def offset_calculate(self, latents, num_inner_steps, epsilon, guidance_scale, mask):
+        noise_loss_list = []
+        
+        latent_cur = torch.concat([latents[-1]]*(self.context.shape[0]//2)) # ([1, 4, 64, 64])
+        for i in range(self.num_ddim_steps):            
+            latent_prev = torch.concat([latents[len(latents) - i - 2]]*latent_cur.shape[0]) # ([1, 4, 64, 64])
+            t = self.model.scheduler.timesteps[i]
+            with torch.no_grad():                
+                noise_pred = self.get_noise_pred_single(torch.concat([latent_cur]*2), mask, t, self.context) # ([2, 4, 64, 64])
+                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
+                noise_pred_w_guidance = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec, _ = self.prev_step(noise_pred_w_guidance, t, latent_cur)
+                loss = latent_prev - latents_prev_rec
+                
+            noise_loss_list.append(loss.detach())
+            latent_cur = latents_prev_rec + loss
+        return noise_loss_list
     
+    def direct_invert(self, img_path, mask_control, prompt, guidance_scale=7.5, num_inner_steps=10, early_stop_epsilon=1e-5):
+        
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt = np.array(image_gt).astype(np.float32)
+        
+        image_rec, ddim_latents = self.ddim_inversion(image_gt, mask=mask_control)
+        
+        noise_loss_list = self.offset_calculate(ddim_latents, num_inner_steps, early_stop_epsilon,guidance_scale, mask_control)
+        return (image_gt, image_rec), ddim_latents[-1], noise_loss_list
+    
+
+class DirectInversion:
+    
+    def prev_step(self, model_output, timestep: int, sample):
+        prev_timestep = timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
+        alpha_prod_t_prev = self.scheduler.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else self.scheduler.final_alpha_cumprod
+        beta_prod_t = 1 - alpha_prod_t
+        pred_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+        pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 * model_output
+        prev_sample = alpha_prod_t_prev ** 0.5 * pred_original_sample + pred_sample_direction
+        
+        difference_scale_pred_original_sample= - beta_prod_t ** 0.5  / alpha_prod_t ** 0.5
+        difference_scale_pred_sample_direction = (1 - alpha_prod_t_prev) ** 0.5 
+        difference_scale = alpha_prod_t_prev ** 0.5 * difference_scale_pred_original_sample + difference_scale_pred_sample_direction
+        
+        return prev_sample,difference_scale
+
+    @torch.no_grad()
+    def image2latent(self, image):
+        with torch.no_grad():
+            if type(image) is Image:
+                image = np.array(image)
+            if type(image) is torch.Tensor and image.dim() == 4:
+                latents = image
+            else:
+                image = torch.from_numpy(image).float() / 127.5 - 1
+                image = image.permute(2, 0, 1).unsqueeze(0).to(device)
+                latents = self.model.vae.encode(image)['latent_dist'].mean
+                latents = latents * 0.18215
+        return latents
+    
+    @torch.no_grad()
+    def latent2image(self, latents, return_type='np'):
+        latents = 1 / 0.18215 * latents.detach()
+        image = self.model.vae.decode(latents)['sample']
+        if return_type == 'np':
+            image = (image / 2 + 0.5).clamp(0, 1)
+            image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
+            image = (image * 255).astype(np.uint8)
+        return image
+    
+    def next_step(self, model_output, timestep: int, sample):
+        timestep, next_timestep = min(timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps, 999), timestep
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep] if timestep >= 0 else self.scheduler.final_alpha_cumprod
+        alpha_prod_t_next = self.scheduler.alphas_cumprod[next_timestep]
+        beta_prod_t = 1 - alpha_prod_t
+        next_original_sample = (sample - beta_prod_t ** 0.5 * model_output) / alpha_prod_t ** 0.5
+        next_sample_direction = (1 - alpha_prod_t_next) ** 0.5 * model_output
+        next_sample = alpha_prod_t_next ** 0.5 * next_original_sample + next_sample_direction
+        return next_sample
+    
+    def get_noise_pred_single(self, latents, t, context):
+        noise_pred = self.model.unet(latents, t, encoder_hidden_states=context)["sample"]
+        return noise_pred
+
+    def get_noise_pred(self, latents, t, guidance_scale, is_forward=True, context=None):
+        latents_input = torch.cat([latents] * 2)
+        if context is None:
+            context = self.context
+        guidance_scale = 1 if is_forward else guidance_scale
+        noise_pred = self.model.unet(latents_input, t, encoder_hidden_states=context)["sample"]
+        noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
+        if is_forward:
+            latents = self.next_step(noise_pred, t, latents)
+        else:
+            latents = self.prev_step(noise_pred, t, latents)
+        return latents
+
+    @torch.no_grad()
+    def init_prompt(self, prompt: str):
+        uncond_input = self.model.tokenizer(
+            [""]*len(prompt), padding="max_length", max_length=self.model.tokenizer.model_max_length,
+            return_tensors="pt"
+        )
+        uncond_embeddings = self.model.text_encoder(uncond_input.input_ids.to(self.model.device))[0]
+        text_input = self.model.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=self.model.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        text_embeddings = self.model.text_encoder(text_input.input_ids.to(self.model.device))[0]
+        self.context = torch.cat([uncond_embeddings, text_embeddings])
+        self.prompt = prompt
+
+    @torch.no_grad()
+    def ddim_loop(self, latent, mask):
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        cond_embeddings=cond_embeddings[[0]]
+        all_latent = [latent]
+        latent = latent.clone().detach()
+        for i in range(self.num_ddim_steps):
+            t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
+            noise_pred = self.get_noise_pred_single(latent, t, cond_embeddings)
+            latent = self.next_step(noise_pred, t, latent)
+            all_latent.append(latent)
+        return all_latent
+    
+    @torch.no_grad()
+    def ddim_null_loop(self, latent):
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        uncond_embeddings=uncond_embeddings[[0]]
+        all_latent = [latent]
+        latent = latent.clone().detach()
+        for i in range(self.num_ddim_steps):
+            t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
+            noise_pred = self.get_noise_pred_single(latent, t, uncond_embeddings)
+            latent = self.next_step(noise_pred, t, latent)
+            all_latent.append(latent)
+        return all_latent
+    
+    @torch.no_grad()
+    def ddim_with_guidance_scale_loop(self, latent,guidance_scale):
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        uncond_embeddings=uncond_embeddings[[0]]
+        cond_embeddings=cond_embeddings[[0]]
+        all_latent = [latent]
+        latent = latent.clone().detach()
+        for i in range(self.num_ddim_steps):
+            t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
+            uncond_noise_pred = self.get_noise_pred_single(latent, t, uncond_embeddings)
+            cond_noise_pred = self.get_noise_pred_single(latent, t, cond_embeddings)
+            noise_pred = uncond_noise_pred + guidance_scale * (cond_noise_pred - uncond_noise_pred)
+            latent = self.next_step(noise_pred, t, latent)
+            all_latent.append(latent)
+        return all_latent
+
+    @property
+    def scheduler(self):
+        return self.model.scheduler
+
+    # @torch.no_grad()
+    # def ddim_inversion(self, image):
+    #     latent = self.image2latent(self.model.vae, image)
+    #     image_rec = self.latent2image(self.model.vae, latent)[0]
+    #     ddim_latents = self.ddim_loop(latent)
+    #     return image_rec, ddim_latents
+
+    @torch.no_grad()
+    def ddim_inversion(self, image, mask):
+        latent = self.image2latent(image)
+        image_rec = self.latent2image(latent)
+        ddim_latents = self.ddim_loop(latent, mask)
+        return image_rec, ddim_latents
+    
+    @torch.no_grad()
+    def ddim_null_inversion(self, image):
+        latent = self.image2latent(self.model.vae, image)
+        image_rec = self.latent2image(self.model.vae, latent)[0]
+        ddim_latents = self.ddim_null_loop(latent)
+        return image_rec, ddim_latents
+    
+    @torch.no_grad()
+    def ddim_with_guidance_scale_inversion(self, image,guidance_scale):
+        latent = self.image2latent(self.model.vae, image)
+        image_rec = self.latent2image(self.model.vae, latent)[0]
+        ddim_latents = self.ddim_with_guidance_scale_loop(latent,guidance_scale)
+        return image_rec, ddim_latents
+
+    def offset_calculate(self, latents, num_inner_steps, epsilon, guidance_scale):
+        noise_loss_list = []
+        latent_cur = torch.concat([latents[-1]]*(self.context.shape[0]//2))
+        for i in range(self.num_ddim_steps):            
+            latent_prev = torch.concat([latents[len(latents) - i - 2]]*latent_cur.shape[0])
+            t = self.model.scheduler.timesteps[i]
+            with torch.no_grad():
+                noise_pred = self.get_noise_pred_single(torch.concat([latent_cur]*2), t, self.context)
+                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
+                noise_pred_w_guidance = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec, _ = self.prev_step(noise_pred_w_guidance, t, latent_cur)
+                loss = latent_prev - latents_prev_rec
+                
+            noise_loss_list.append(loss.detach())
+            latent_cur = latents_prev_rec + loss
+            
+        return noise_loss_list
+    
+    
+    def invert(self, img_path, mask_control, prompt, guidance_scale=7.5, num_inner_steps=10, early_stop_epsilon=1e-5):
+        import pdb; pdb.set_trace()
+        
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt = np.array(image_gt).astype(np.float32)
+        
+        image_rec, ddim_latents = self.ddim_inversion(image_gt, mask=mask_control)
+        
+        noise_loss_list = self.offset_calculate(ddim_latents, num_inner_steps, early_stop_epsilon,guidance_scale)
+        return image_gt, image_rec, ddim_latents, noise_loss_list
+    
+    def invert_without_attn_controller(self, image_gt, prompt, guidance_scale, num_inner_steps=10, early_stop_epsilon=1e-5):
+        self.init_prompt(prompt)
+        
+        image_rec, ddim_latents = self.ddim_inversion(image_gt)
+        
+        noise_loss_list = self.offset_calculate(ddim_latents, num_inner_steps, early_stop_epsilon,guidance_scale)
+        return image_gt, image_rec, ddim_latents, noise_loss_list
+    
+    def invert_with_guidance_scale_vary_guidance(self, image_gt, prompt, inverse_guidance_scale, forward_guidance_scale, num_inner_steps=10, early_stop_epsilon=1e-5):
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_rec, ddim_latents = self.ddim_with_guidance_scale_inversion(image_gt,inverse_guidance_scale)
+        
+        noise_loss_list = self.offset_calculate(ddim_latents, num_inner_steps, early_stop_epsilon,forward_guidance_scale)
+        return image_gt, image_rec, ddim_latents, noise_loss_list
+
+    def null_latent_calculate(self, latents, num_inner_steps, epsilon, guidance_scale):
+        noise_loss_list = []
+        latent_cur = torch.concat([latents[-1]]*(self.context.shape[0]//2))
+        uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        for i in range(self.num_ddim_steps):            
+            latent_prev = torch.concat([latents[len(latents) - i - 2]]*latent_cur.shape[0])
+            t = self.model.scheduler.timesteps[i]
+
+            if num_inner_steps!=0:
+                uncond_embeddings = uncond_embeddings.clone().detach()
+                uncond_embeddings.requires_grad = True
+                optimizer = Adam([uncond_embeddings], lr=1e-2 * (1. - i / 100.))
+                for j in range(num_inner_steps):
+                    latents_input = torch.cat([latent_cur] * 2)
+                    noise_pred = self.model.unet(latents_input, t, encoder_hidden_states=torch.cat([uncond_embeddings, cond_embeddings]))["sample"]
+                    noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
+                    
+                    latents_prev_rec = self.prev_step(noise_pred, t, latent_cur)[0]
+                    
+                    loss = nnf.mse_loss(latents_prev_rec[[0]], latent_prev[[0]])
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    loss_item = loss.item()
+
+                    if loss_item < epsilon + i * 2e-5:
+                        break
+                    
+            with torch.no_grad():
+                noise_pred = self.get_noise_pred_single(torch.concat([latent_cur]*2), t, self.context)
+                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
+                noise_pred_w_guidance = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec, _ = self.prev_step(noise_pred_w_guidance, t, latent_cur)
+                
+                latent_cur = self.get_noise_pred(latent_cur, t,guidance_scale, False, torch.cat([uncond_embeddings, cond_embeddings]))[0]
+                loss = latent_cur - latents_prev_rec
+                
+            noise_loss_list.append(loss.detach())
+            latent_cur = latents_prev_rec + loss
+            
+        return noise_loss_list
+        
+    
+    def invert_null_latent(self, image_gt, prompt, guidance_scale, num_inner_steps=10, early_stop_epsilon=1e-5):
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_rec, ddim_latents = self.ddim_inversion(image_gt)
+        
+        latent_list = self.null_latent_calculate(ddim_latents, num_inner_steps, early_stop_epsilon,guidance_scale)
+        return image_gt, image_rec, ddim_latents, latent_list
+    
+    def offset_calculate_not_full(self, latents, num_inner_steps, epsilon, guidance_scale,scale):
+        noise_loss_list = []
+        latent_cur = torch.concat([latents[-1]]*(self.context.shape[0]//2))
+        for i in range(self.num_ddim_steps):            
+            latent_prev = torch.concat([latents[len(latents) - i - 2]]*latent_cur.shape[0])
+            t = self.model.scheduler.timesteps[i]
+            with torch.no_grad():
+                noise_pred = self.get_noise_pred_single(torch.concat([latent_cur]*2), t, self.context)
+                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
+                noise_pred_w_guidance = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec, _ = self.prev_step(noise_pred_w_guidance, t, latent_cur)
+                loss = latent_prev - latents_prev_rec
+                loss=loss*scale
+                
+            noise_loss_list.append(loss.detach())
+            latent_cur = latents_prev_rec + loss
+            
+        return noise_loss_list
+        
+    def invert_not_full(self, image_gt, prompt, guidance_scale, num_inner_steps=10, early_stop_epsilon=1e-5,scale=1.):
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_rec, ddim_latents = self.ddim_inversion(image_gt)
+        
+        noise_loss_list = self.offset_calculate_not_full(ddim_latents, num_inner_steps, early_stop_epsilon,guidance_scale,scale)
+        return image_gt, image_rec, ddim_latents, noise_loss_list
+    
+    def offset_calculate_skip_step(self, latents, num_inner_steps, epsilon, guidance_scale,skip_step):
+        noise_loss_list = []
+        latent_cur = torch.concat([latents[-1]]*(self.context.shape[0]//2))
+        for i in range(self.num_ddim_steps):            
+            latent_prev = torch.concat([latents[len(latents) - i - 2]]*latent_cur.shape[0])
+            t = self.model.scheduler.timesteps[i]
+            with torch.no_grad():
+                noise_pred = self.get_noise_pred_single(torch.concat([latent_cur]*2), t, self.context)
+                noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
+                noise_pred_w_guidance = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                latents_prev_rec, _ = self.prev_step(noise_pred_w_guidance, t, latent_cur)
+                if (i%skip_step)==0:
+                    loss = latent_prev - latents_prev_rec
+                else:
+                    loss=torch.zeros_like(latent_prev)
+                
+            noise_loss_list.append(loss.detach())
+            latent_cur = latents_prev_rec + loss
+            
+        return noise_loss_list
+    
+    
+    def invert_skip_step(self, image_gt, prompt, guidance_scale, skip_step,num_inner_steps=10, early_stop_epsilon=1e-5,scale=1.):
+        self.init_prompt(prompt)
+        ptp_utils.register_attention_control(self.model, None)
+        
+        image_rec, ddim_latents = self.ddim_inversion(image_gt)
+        
+        noise_loss_list = self.offset_calculate_skip_step(ddim_latents, num_inner_steps, early_stop_epsilon,guidance_scale,skip_step)
+        return image_gt, image_rec, ddim_latents, noise_loss_list
+    
+    
+    def __init__(self, model,num_ddim_steps):
+        self.model = model
+        self.tokenizer = self.model.tokenizer
+        self.prompt = None
+        self.context = None
+        self.num_ddim_steps=num_ddim_steps
+        
 
 @torch.no_grad()
 def text2image_ldm_stable(
@@ -566,6 +946,7 @@ def text2image_ldm_stable(
     latent: Optional[torch.FloatTensor] = None,
     mask_control: Optional[torch.tensor] = None,
     uncond_embeddings=None,
+    noise_loss_list=None,
     start_time=50,
     return_type='image'
 ):
@@ -599,6 +980,8 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings_, text_embeddings])
         latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False,guess_mode=args.guess_mode)
         
+        if noise_loss_list: latents = latents + noise_loss_list[i]
+        
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
     else:
@@ -606,12 +989,12 @@ def text2image_ldm_stable(
     return image, latent
 
 
-def run_and_display(prompts, controller, latent=None, mask_control=None, run_baseline=False, generator=None, uncond_embeddings=None, verbose=True, prefix='inversion'):
+def run_and_display(prompts, controller, latent=None, mask_control=None, run_baseline=False, generator=None, uncond_embeddings=None, noise_loss_list=None, verbose=True, prefix='inversion'):
     if run_baseline:
         print("w.o. prompt-to-prompt")
         images, latent = run_and_display(prompts, EmptyControl(), latent=latent, mask_control=mask_control, run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, mask_control=mask_control,num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings)
+    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, mask_control=mask_control,num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings, noise_loss_list=noise_loss_list)
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
@@ -652,6 +1035,8 @@ def check_inversion():
     controller = AttentionStore()
     
     run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=uncond_embeddings, verbose=True, prefix='check_inversion')
+
+
 if __name__ == '__main__':
     # Load Stable Diffusion 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
@@ -670,8 +1055,10 @@ if __name__ == '__main__':
     tokenizer = ldm_stable.tokenizer
     
     # Load null text inversion
-    null_inversion = NullInversion(ldm_stable)
+    # if args.inversion_type == "null_text_inversion": inversion = NullInversion(ldm_stable)
+    # elif args.inversion_type == "direct_inversion": inversion = DirectInversion(ldm_stable, num_ddim_steps=args.ddim_steps)
     
+    inversion = NullInversion(ldm_stable)
     # Load Caption
     captions = {}
     with open(args.caption_path,'r') as f:
@@ -691,14 +1078,21 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(args.save_root , 'inv')): os.mkdir(os.path.join(args.save_root , 'inv'))
     if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
-    # Inversion loop
+    names = sorted(os.listdir(args.data_root))
+    names = [name[:-4] for name in names if '.jpg' in name]
+    if args.end != -1:
+        names = names[args.start:args.end+1]
+    else:
+        names = names[args.start:]
+    print()
     
-    for file in os.listdir(args.data_root):    
+    print(names)    
+    # Adversarial optimization loop
+    for name in tqdm(names):
+        
         # prepare img & control mask path
-        if not 'png' in file or 'control' in file: continue 
-        name = file[:-4]
-        img_path = os.path.join(args.data_root, file)
-        control_mask_path = os.path.join(args.control_mask_dir, file.replace('.png', '_control.png'))
+        img_path = os.path.join(args.data_root, name + '.jpg')
+        control_mask_path = os.path.join(args.control_mask_dir, name + '.png')
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
@@ -711,7 +1105,11 @@ if __name__ == '__main__':
             #continue
         
         # load catpion
-        prompt = captions[img_path.split('/')[-1]]
+        if img_path.split('/')[-1] in captions:
+            prompt = captions[img_path.split('/')[-1]]
+        else: 
+            print("DCI don't have caption for", img_path.split('/')[-1])
+            continue
         print(prompt)
         
         # load control mask
@@ -720,18 +1118,33 @@ if __name__ == '__main__':
         mask_control = cv2.resize(mask_control, (512,512)) / 255.0
         mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
         
-        # null text inversion
+        # inversion
+        uncond_embeddings, noise_loss_list = None, None
         start = time.time()
-        (image_gt, image_enc), x_t, uncond_embeddings = null_inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
+        if args.inversion_type == 'null_text_inversion':
+            (image_gt, image_enc), x_t, uncond_embeddings = inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
+        elif args.inversion_type == 'direct_inversion':
+            (image_gt, image_rec), x_t, noise_loss_list = inversion.direct_invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt)        
+        
+        # print(type(ddim_latents))
+        print(x_t.shape, noise_loss_list[0].shape)
+        # print(len(noise_loss_list))
+        # # import pdb; pdb.set_trace()
+        
         print('Inversion Time:', time.time() - start)
-        gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)
+        
+        if uncond_embeddings: gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)        
+        if noise_loss_list: gather_noise_loss = torch.cat(noise_loss_list, 0)
         
         # save x_t & uncond_emb
         torch.save(x_t, f'{args.save_root}/embeddings/{name}_latent.pth')
-        torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/{name}_uncond.pth')
-                
+        if uncond_embeddings: torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/{name}_uncond.pth')
+        if uncond_embeddings: torch.save(gather_noise_loss, f'{args.save_root}/embeddings/{name}_noise_loss.pth')
+        
         # show 
         controller = AttentionStore()
-        image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, verbose=False)
+        image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control,uncond_embeddings=uncond_embeddings, noise_loss_list=noise_loss_list,verbose=False)
         ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/{name}', shuffix='.jpg')
-        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/{name}', shuffix='.png')
+        ptp_utils.view_images([image_inv[0]], prefix=f'{args.save_root}/inv/{name}', shuffix='.jpg')
+
+       

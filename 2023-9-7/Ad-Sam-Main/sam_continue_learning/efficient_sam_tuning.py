@@ -20,7 +20,7 @@ from utils.loss_mask import loss_masks
 import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR, StepLR
 from pathlib import Path
-from efficient_sam.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
+from efficient_sam_training.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
 from utils.misc import get_logger
 
 def lr_lambda(epoch):
@@ -471,12 +471,14 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
                 input_points = labels_points.view(K,N,point_num,2)
                 input_labels = torch.ones(K,N,point_num)
             
+            import pdb; pdb.set_trace()
             predicted_logits, predicted_iou = net(
                 inputs/255.0,
                 input_points,
                 input_labels,
                 multimask_output=True
             )
+            
             
             if args.train_mask_id == 'best' or args.test_mask_id=='all':
                 sorted_ids = torch.argsort(predicted_iou, dim=-1, descending=True)

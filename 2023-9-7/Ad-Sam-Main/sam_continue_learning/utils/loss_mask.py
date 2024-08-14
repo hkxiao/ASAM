@@ -173,6 +173,7 @@ def loss_masks(src_masks, target_masks, num_masks, oversample_ratio=3.0):
             oversample_ratio,
             0.75,
         )
+        
         # get gt labels
         point_labels = point_sample(
             target_masks,

@@ -35,6 +35,9 @@ def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, i
 
 
 def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.png'):
+    print(len(images))
+    images = [image for image in images if type(image) == np.ndarray]
+    
     if type(images) is list:
         num_empty = len(images) % num_rows
     elif images.ndim == 4:
@@ -60,6 +63,77 @@ def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.
     pil_img = Image.fromarray(image_)
     display(pil_img)
     pil_img.save(prefix + shuffix)
+
+
+    
+def view_images_with_title(images, titles, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.png', font_path=None, font_size=50):
+    # 过滤出有效的 ndarray 图像
+    images = [image for image in images if isinstance(image, np.ndarray)]
+    print(len(images))
+    
+    if len(images) == 0:
+        raise ValueError("No valid images found in the list.")
+    
+    if len(images) != len(titles):
+        raise ValueError("The number of images and titles must be the same.")
+    
+    num_empty = len(images) % num_rows
+    empty_images = np.ones(images[0].shape, dtype=np.uint8) * 255
+    images = [image.astype(np.uint8) for image in images] + [empty_images] * num_empty
+    titles = titles + [''] * num_empty  # 补充空白图像的标题为空字符串
+    num_items = len(images)
+
+    h, w, c = images[0].shape
+    offset = int(h * offset_ratio)
+
+    # 使用自定义字体或默认字体
+    if font_path:
+        font = ImageFont.truetype(font_path, font_size)
+    else:
+        font = ImageFont.load_default()
+        font_size = font_size  # 如果使用默认字体，则设置一个较大的字体大小
+
+    num_cols = (num_items + num_rows - 1) // num_rows  # 向上取整以确保列数正确
+
+    # 增加标题区域的高度
+    title_height = font_size + 10  # 给标题留一些间隙
+    total_height = h * num_rows + offset * (num_rows - 1) + title_height * num_rows
+
+    image_ = np.ones((total_height, w * num_cols + offset * (num_cols - 1), 3), dtype=np.uint8) * 255
+
+    for i in range(num_rows):
+        for j in range(num_cols):
+            idx = i * num_cols + j
+            if idx < num_items:
+                y_offset = i * (h + offset + title_height)
+                x_offset = j * (w + offset)
+                image_[y_offset + title_height: y_offset + title_height + h, x_offset: x_offset + w] = images[idx]
+    
+    pil_img = Image.fromarray(image_)
+    draw = ImageDraw.Draw(pil_img)
+
+    # 绘制标题
+    for i in range(num_rows):
+        for j in range(num_cols):
+            idx = i * num_cols + j
+            if idx < num_items:
+                y_offset = i * (h + offset + title_height)
+                x_offset = j * (w + offset)
+                title = titles[idx]
+                text_bbox = draw.textbbox((0, 0), title, font=font, font_size=font_size)
+                text_width = text_bbox[2] - text_bbox[0]
+                text_height = text_bbox[3] - text_bbox[1]
+                text_x = x_offset + (w - text_width) // 2
+                text_y = y_offset + (title_height - text_height) // 2
+                draw.text((text_x, text_y), title, fill=(0, 0, 0), font=font, font_size=font_size)
+    
+    display(pil_img)
+    pil_img.save(prefix + shuffix)
+    
+# 使用示例
+# images = [np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8) for _ in range(10)]
+# titles = [f"image_{i}" for i in range(10)]
+# view_images(images, titles, num_rows=2, offset_ratio=0.05, prefix='output', suffix='.png')
 
 def get_noise_pred(model, latents, masks, t, context, guess_mode=None):
     if masks != None:

@@ -1,5 +1,5 @@
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-python -m torch.distributed.run --nproc_per_node=8 --master_port=30011  efficient_sam_tuning.py \
+python -m torch.distributed.run --nproc_per_node=1 --master_port=30011  efficient_sam_tuning.py \
     --model-type vit_t \
     --output_prefix efficient_asam_token-tuning_no-data-augmentation@4 \
     --batch_size_train=4 \

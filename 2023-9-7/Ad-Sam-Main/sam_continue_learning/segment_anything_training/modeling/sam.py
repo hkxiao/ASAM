@@ -102,11 +102,13 @@ class Sam(nn.Module):
                 points = (image_record["point_coords"], image_record["point_labels"])
             else:
                 points = None
+                
             sparse_embeddings, dense_embeddings = self.prompt_encoder(
                 points=points,
                 boxes=image_record.get("boxes", None),
                 masks=image_record.get("mask_inputs", None),
             )
+            
             low_res_masks, iou_predictions = self.mask_decoder(
                 image_embeddings=curr_embedding.unsqueeze(0),
                 image_pe=self.prompt_encoder.get_dense_pe(),

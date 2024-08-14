@@ -36,7 +36,7 @@ def collate(batch):
     
     return batch
 
-def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
+def get_im_gt_name_dict(datasets, flag='valid', limit=-1, adv_prompt_training =False):
     print("------------------------------", flag, "--------------------------------")
     name_im_gt_list = []
 
@@ -55,25 +55,16 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
             print(datasets[i]["name"] + "continue")
             continue
     
-        
         tmp_im_list, tmp_gt_list = [], []
         for root, dirs, files in os.walk(datasets[i]["im_dir"]): 
             tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
 
-        #print(tmp_im_list)
         if 'DRAM' in datasets[i]["name"]:
-            tmp_im_list = [x for x in tmp_im_list if 'train' not in x]
+            tmp_im_list = [x for x in tmp_im_list if 'train' not in x]        
         
-        #print(tmp_im_list)
-        # raise NameError
+        if limit!=-1 and len(tmp_im_list)>limit:
+            tmp_im_list = sorted(tmp_im_list)[:limit]
         
-        # print("sb")
-        # print(limit, flag,len(tmp_im_list))
-
-        # raise NameError
-        
-        if flag=='train' and limit!=-1 and len(tmp_im_list)>limit:
-            tmp_im_list=tmp_im_list[:limit]
         if "BBC038v1" in datasets[i]["name"]:   
             tmp_im_list = [x for x in tmp_im_list if 'masks' not in x]
             name_im_gt_list.append({"dataset_name":datasets[i]["name"],
@@ -91,13 +82,13 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
             if 'DRAM' in datasets[i]["name"]:
                 tmp_gt_list = [x.replace('test_images', 'test_targets_color') for x in tmp_gt_list]  
             
-            # print(tmp_gt_list)
-            # raise NameError
+
             tmp_gt_list = [x for x in tmp_gt_list if os.path.exists(x)]
             if 'DRAM' not in datasets[i]["name"]:
                 tmp_im_list = [x for x in tmp_im_list if os.path.exists(x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]))]
         
         tmp_im_list, tmp_gt_list = sorted(tmp_im_list), sorted(tmp_gt_list)
+        
         
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
@@ -109,9 +100,15 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
                                 "im_ext":datasets[i]["im_ext"],
                                 "gt_ext":datasets[i]["gt_ext"]})
 
+        if adv_prompt_training: 
+            tmp_adv_boxes_list = [x.replace(datasets[i]["im_ext"],datasets[i]["adv_boxes_ext"]).replace(datasets[i]["im_dir"],datasets[i]["adv_boxes_dir"]) for x in tmp_im_list]
+            tmp_adv_points_list = [x.replace(datasets[i]["im_ext"],datasets[i]["adv_points_ext"]).replace(datasets[i]["im_dir"],datasets[i]["adv_points_dir"]) for x in tmp_im_list]
+            name_im_gt_list[-1]['adv_boxes_path'] = tmp_adv_boxes_list
+            name_im_gt_list[-1]['adv_points_path'] = tmp_adv_points_list
+            
     return name_im_gt_list
 
-def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1, batch_size_prompt_start=0, training=False, numworkers=-1):
+def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1, batch_size_prompt_start=0, training=False, adv_prompt_training=False, numworkers=-1):
     gos_dataloaders = []
     gos_datasets = []
 
@@ -129,7 +126,7 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
         
     if training:
         for i in range(len(name_im_gt_list)):
-            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True,batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True,batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start, adv_prompt_training=adv_prompt_training)
             else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
             gos_datasets.append(gos_dataset)
 

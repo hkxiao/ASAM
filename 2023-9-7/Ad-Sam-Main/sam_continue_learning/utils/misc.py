@@ -484,6 +484,7 @@ def masks_sample_points(masks,k=10):
         y_idx = torch.masked_select(y,select_mask)
         
         perm = torch.randperm(x_idx.size(0))
+        
         idx = perm[:k]
         samples_x = x_idx[idx]
         samples_y = y_idx[idx]
@@ -525,7 +526,7 @@ def mask_iou(pred_label,label):
 
     intersection = ((label * pred_label) > 0).sum()
     union = ((label + pred_label) > 0).sum()
-    if union.item()==0: raise NameError
+    if union.item()==0: return torch.tensor(1e-5)
     return intersection / union
 
 
@@ -570,7 +571,7 @@ def boundary_iou(gt, dt, dilation_ratio=0.02):
     intersection = ((gt_boundary * dt_boundary) > 0).sum()
     union = ((gt_boundary + dt_boundary) > 0).sum()
     
-    if union.item()==0: raise NameError
+    if union.item()==0: return torch.tensor(1e-5)
     boundary_iou = intersection / union
 
     return torch.tensor(boundary_iou).float().to(device)

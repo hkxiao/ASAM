@@ -65,7 +65,7 @@ class CityScapesDataset(Dataset):
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
-        print(gt_path)
+        #print(gt_path)
         
         im = io.imread(im_path)
         naive_gt = io.imread(gt_path)        

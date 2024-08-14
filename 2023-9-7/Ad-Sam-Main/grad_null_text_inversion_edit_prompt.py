@@ -21,6 +21,7 @@ import json
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils.show import show_box, show_mask, show_points 
+from typing import Any
 
 '''
 CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --beta 1 --alpha 0.01 --steps 10  --ddim_steps=50 --norm 2
@@ -29,10 +30,20 @@ CUDA_VISIBLE_DEVICES=0 python3 grad_null_text_inversion_edit.py --model sam --be
 ############## Initialize #####################
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1', 'True'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0', 'False'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+        
 # Definder setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
-parser.add_argument('--attack_object', type=str, default='img', help='cnn')
+parser.add_argument('--attack_object', nargs='+')
 
 # Attacker setting
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')
@@ -46,10 +57,16 @@ parser.add_argument('--eps', type=float, default=0.2, help='cnn')
 parser.add_argument('--alpha_boxes', type=float, default=0.01, help='cnn')
 parser.add_argument('--eps_boxes', type=float, default=0.2, help='cnn')
 parser.add_argument('--boxes_noise_scale', type=float, default=0.1, help='cnn')
+parser.add_argument('--alpha_points', type=float, default=0.01, help='cnn')
+parser.add_argument('--eps_points', type=float, default=0.2, help='cnn')
+parser.add_argument('--points_noise_scale', type=float, default=0.1, help='cnn')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--mu', default=0.5, type=float, help='random seed')
 
 # Loss setting
+parser.add_argument('--embedding_sup', type=str2bool, default=False, help='cnn')
+parser.add_argument('--embedding_mse_weight', type=float, default=1.0, help='cnn')
+
 parser.add_argument('--gamma', type=float, default=100, help='bce loss weight')
 parser.add_argument('--kappa', type=float, default=100, help='dice loss weight')
 parser.add_argument('--beta', type=float, default=1, help='cnn')
@@ -76,7 +93,7 @@ parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa
 
 # prompt setting 
 parser.add_argument('--prompt_bs', type=int, default=150, help='cnn')
-parser.add_argument('--prompt_type', type=str, default='box', help='cnn')
+parser.add_argument('--prompt_type', nargs='+')
 parser.add_argument('--point_num', type=int, default=10, help='cnn')
 
 args = parser.parse_args()
@@ -629,6 +646,160 @@ def limitation01(y):
     y[idx] = (torch.tanh(1000*(y[idx])))/10000
     return y
 
+
+
+def sam_forward(
+    net,
+    batched_input: List[Dict[str, Any]],
+    multimask_output: bool,
+    embedding_sup: bool
+) -> List[Dict[str, torch.Tensor]]:
+    """
+    Predicts masks end-to-end from provided images and prompts.
+    If prompts are not known in advance, using SamPredictor is
+    recommended over calling the model directly.
+
+    Arguments:
+        batched_input (list(dict)): A list over input images, each a
+        dictionary with the following keys. A prompt key can be
+        excluded if it is not present.
+            'image': The image as a torch tensor in 3xHxW format,
+            already transformed for input to the model.
+            'original_size': (tuple(int, int)) The original size of
+            the image before transformation, as (H, W).
+            'point_coords': (torch.Tensor) Batched point prompts for
+            this image, with shape BxNx2. Already transformed to the
+            input frame of the model.
+            'point_labels': (torch.Tensor) Batched labels for point prompts,
+            with shape BxN.
+            'boxes': (torch.Tensor) Batched box inputs, with shape Bx4.
+            Already transformed to the input frame of the model.
+            'mask_inputs': (torch.Tensor) Batched mask inputs to the model,
+            in the form Bx1xHxW.
+        multimask_output (bool): Whether the model should predict multiple
+        disambiguating masks, or return a single mask.
+
+    Returns:
+        (list(dict)): A list over input images, where each element is
+        as dictionary with the following keys.
+            'masks': (torch.Tensor) Batched binary mask predictions,
+            with shape BxCxHxW, where B is the number of input promts,
+            C is determiend by multimask_output, and (H, W) is the
+            original size of the image.
+            'iou_predictions': (torch.Tensor) The model's predictions
+            of mask quality, in shape BxC.
+            'low_res_logits': (torch.Tensor) Low resolution logits with
+            shape BxCxHxW, where H=W=256. Can be passed as mask input
+            to subsequent iterations of prediction.
+    """
+    input_images = torch.stack([net.preprocess(x["image"]) for x in batched_input], dim=0)
+    image_embeddings, interm_embeddings = net.image_encoder(input_images)
+
+    outputs = []
+    for image_record, curr_embedding in zip(batched_input, image_embeddings):
+        if "point_coords" in image_record:
+            points = (image_record["point_coords"], image_record["point_labels"])
+        else:
+            points = None
+        
+        if multimask_output == False:
+            masks, low_res_masks, iou_predictions = torch.empty(0,1,1024,1024).cuda(), torch.empty(0,1,256,256).cuda(), torch.empty(0,1).cuda()
+            
+        if 'points' in args.prompt_type:
+            sparse_embeddings, dense_embeddings = net.prompt_encoder(
+                points=points,
+                boxes=None,
+                masks=None,
+            )
+            
+            low_res_masks_points, iou_predictions_points = net.mask_decoder(
+                image_embeddings=curr_embedding.unsqueeze(0) if embedding_sup!=False else curr_embedding.unsqueeze(0).detach(),
+                image_pe=net.prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=multimask_output
+            )
+            
+            masks_points = net.postprocess_masks(
+                low_res_masks_points,
+                input_size=image_record["image"].shape[-2:],
+                original_size=image_record["original_size"],
+            )
+            masks_points = masks_points > net.mask_threshold
+
+            masks, low_res_masks, iou_predictions  = torch.cat([masks, masks_points]), torch.cat([low_res_masks, low_res_masks_points]), torch.cat([iou_predictions, iou_predictions_points])
+            
+        if 'boxes' in args.prompt_type:
+            sparse_embeddings, dense_embeddings = net.prompt_encoder(
+                points=None,
+                boxes=image_record["boxes"],
+                masks=None,
+            )
+        
+            low_res_masks_boxes, iou_predictions_boxes = net.mask_decoder(
+                image_embeddings=curr_embedding.unsqueeze(0) if embedding_sup!=False else curr_embedding.unsqueeze(0).detach(),
+                image_pe=net.prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=multimask_output
+            )
+            
+            masks_boxes = net.postprocess_masks(
+                low_res_masks_boxes,
+                input_size=image_record["image"].shape[-2:],
+                original_size=image_record["original_size"],
+            )
+            masks_boxes = masks_boxes > net.mask_threshold
+
+            masks, low_res_masks, iou_predictions  = torch.cat([masks, masks_boxes]), torch.cat([low_res_masks, low_res_masks_boxes]), torch.cat([iou_predictions, iou_predictions_boxes])
+        
+        outputs.append(
+            {
+                "masks": masks,
+                "iou_predictions": iou_predictions,
+                "low_res_logits": low_res_masks,
+                "encoder_embedding": curr_embedding.unsqueeze(0),
+            }
+        )
+
+    return outputs, image_embeddings
+
+def render_vis(image, worst_mask, prompt_type, boxes=None, points=None):
+    worst_mask_show = np.zeros((512,512,3))
+    fig, ax = plt.subplots(figsize=(5.12, 5.12))
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0,wspace=0)
+    ax.axis('off')
+    plt.imshow(image[0]/255)
+        
+    num = origin_len
+    length = 1<<24
+    if args.show_all_masks == True: worst_mask = torch.concat([worst_mask,sup_masks/255])
+    
+    for i, single_mask in enumerate(worst_mask):
+        print(prompt_type)
+        single_mask = single_mask[0].cpu().numpy()
+        pos = int((length-1) *(i+1) / num)
+        color = np.array((pos%256, pos//256%256, pos//(1<<16)))
+        worst_mask_show[single_mask!=0] = color
+        
+        if i < args.prompt_bs:
+            if prompt_type == 'boxes':
+                print('show boxes')
+                box= tuple((boxes[i].cpu().numpy()/2).tolist())        
+                show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
+            else:
+                point = (points[i].cpu().numpy()/2).tolist()
+                show_points(point, labels=[1]*args.point_num, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256),marker_size=100)
+                            
+        show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
+        
+    fig.canvas.draw()
+    data = fig.canvas.tostring_rgb()
+    width, height = fig.canvas.get_width_height()
+    vis_chunk = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3))
+
+    return vis_chunk, worst_mask_show
+
 @torch.no_grad()
 def text2image_ldm_stable_last(
     model,
@@ -642,11 +813,12 @@ def text2image_ldm_stable_last(
     start_time=50,
     boxes=None,
     points=None,
+    label_masks=None,
     label_masks_256=None,
     mask_control=None,
     raw_img=None,
     raw_img_norm=None,
-    attack_object='img',
+    attack_object=['image'],
 ): 
     
     batch_size = len(prompt)
@@ -660,6 +832,7 @@ def text2image_ldm_stable_last(
         truncation=True,
         return_tensors="pt",
     )
+    
     text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
     max_length = text_input.input_ids.shape[-1]
     if uncond_embeddings is None:
@@ -672,6 +845,7 @@ def text2image_ldm_stable_last(
 
     latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)    
     model.scheduler.set_timesteps(num_inference_steps if num_inference_steps>0 else 1)
+    
     best_img = raw_img
     ori_latents = latents.clone().detach()
     adv_latents = latents.clone().detach()
@@ -681,10 +855,19 @@ def text2image_ldm_stable_last(
     ori_boxes = boxes.clone().detach()
     adv_boxes = boxes.clone().detach()
     momentum_boxes = 0
+
+    best_points = points
+    ori_points = points.clone().detach()
+    adv_points = points.clone().detach()
+    momentum_points = 0
     
-    worst_iou, iou_list = 1.0, []
-    worst_mask =  F.interpolate(label_masks_256.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False) / 255.0
-    
+    worst_iou_chunk1, worst_iou_chunk2, iou_list = 1.0, 1.0, []
+    worst_mask_chunk1 =  F.interpolate(label_masks_256.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False) / 255.0
+    worst_mask_chunk2 =  worst_mask_chunk1.clone()
+     
+    standard_input_images = net.preprocess(F.interpolate(raw_img, image_size))
+    standard_image_embeddings, standard_interm_embeddings = net.image_encoder(standard_input_images)
+     
     for k in range(args.steps):
         latents = adv_latents
         
@@ -693,7 +876,6 @@ def text2image_ldm_stable_last(
                 context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
             else:
                 context = torch.cat([uncond_embeddings_, text_embeddings])
-            #print(model.device, latents.device, mask_control.device, context.device, t.device)
             latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False, guess_mode=args.guess_mode)
 
         image = None
@@ -703,6 +885,7 @@ def text2image_ldm_stable_last(
             latents_t = (1 / 0.18215 * latents_last)
             image = model.vae.decode(latents_t)['sample']
             image = (image / 2 + 0.5)
+            
             #print(4, image.max(), image.min())
             image = limitation01(image)
             if args.ddim_steps<=0: 
@@ -713,19 +896,20 @@ def text2image_ldm_stable_last(
             #print(1, image_m.max(), image_m.min())
             
             adv_boxes.requires_grad = True
+            adv_points.requires_grad = True
             
             if args.model == 'sam':
                 example = {}
                 example['image'] = image_m[0]*255.0
-                if args.prompt_type == 'box': example['boxes'] = adv_boxes
-                else: 
-                    example['point_coords'] = points
-                    example['point_labels'] = torch.ones(points.shape[:-1])
+                if 'boxes' in args.prompt_type:  example['boxes'] = adv_boxes
+                if 'points' in args.prompt_type:
+                    example['point_coords'] = adv_points
+                    example['point_labels'] = torch.ones(adv_points.shape[:-1])
 
                 example['original_size'] = image_size
-                output, interbeddings = net([example], multimask_output=False)
+                output, image_embeddings = sam_forward(net=net, batched_input=[example], multimask_output=False, embedding_sup=args.embedding_sup)
+    
                 output = output[0]
-                # print(example['image'].dtype, example['boxes'].dtype)
                 ad_masks, ad_iou_predictions, ad_low_res_logits = output['masks'],output['iou_predictions'],output['low_res_logits']  
                 
             elif args.model == 'sam_efficient':
@@ -746,91 +930,132 @@ def text2image_ldm_stable_last(
                 ad_masks = torch.ge(ad_low_res_logits,0)
 
             # print(ad_low_res_logits.shape, label_masks_256.shape)
-            loss_ce = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits, label_masks_256/255.0) 
-            loss_dice = args.kappa * dice_loss(ad_low_res_logits.sigmoid(), label_masks_256/255.0)     
+            loss_ce_chunk1 = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits[:label_masks_256.shape[0]], label_masks_256/255.0) 
+            loss_dice_chunk1 = args.kappa * dice_loss(ad_low_res_logits[:label_masks_256.shape[0]].sigmoid(), label_masks_256/255.0)     
 
-            iou = compute_iou(ad_low_res_logits, label_masks_256).item()
-            print("iou:",iou)
-            iou_list.append(iou)
+            if len(args.prompt_type) == 2: 
+                loss_ce_chunk2 = args.gamma * torch.nn.functional.binary_cross_entropy_with_logits(ad_low_res_logits[label_masks_256.shape[0]:], label_masks_256/255.0) 
+                loss_dice_chunk2 = args.kappa * dice_loss(ad_low_res_logits[label_masks_256.shape[0]:].sigmoid(), label_masks_256/255.0)          
+            else:
+                loss_ce_chunk2, loss_dice_chunk2 = loss_ce_chunk1, loss_dice_chunk1
             
-            if iou < worst_iou and args.attack_object=='img':                
-                best_img, worst_iou, worst_mask = image.detach(), iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False).detach()
-            if iou < worst_iou and args.attack_object=='boxes':                
-                best_boxes, worst_iou, worst_mask = adv_boxes.detach(), iou, F.interpolate(ad_masks.to(torch.float32), size=(512,512), mode='bilinear', align_corners=False).detach()
-
+            if args.embedding_sup: 
+                loss_embedding_mse = args.embedding_mse_weight * torch.nn.functional.mse_loss(image_embeddings, standard_image_embeddings)
+            
             image_m = image_m - mean[None,:,None,None]
             image_m = image_m / std[None,:,None,None]
             loss_mse =  args.beta * torch.norm(image_m-raw_img_norm, p=args.norm).mean()  # **2 / 50
             
-            loss = loss_dice + loss_ce - loss_mse
+            loss = loss_dice_chunk1 + loss_dice_chunk2 + loss_ce_chunk1 + loss_ce_chunk2 - loss_mse
+            if args.embedding_sup: loss = loss + loss_embedding_mse 
+                
             loss.backward()
             print('*' * 50)
-            print('Loss', loss.item(), 'Loss_dice', loss_dice.item(),'Loss_ce', loss_ce.item(), 'Loss_mse', loss_mse.item())
+            print('Loss', loss.item(), 'Loss_dice_chunk1', loss_dice_chunk1.item(),'Loss_ce_chunk1', loss_ce_chunk1.item(), \
+                'Loss_dice_chunk2', loss_dice_chunk2.item(),'Loss_ce_chunk2', loss_ce_chunk2.item() 
+                )
+            
+            print('Loss_mse for generated image: ', loss_mse.item())
+            if args.embedding_sup: print('Image Embedding Loss_mse', loss_embedding_mse.item())
             print(k, 'Predicted:', loss)
-        
-        
-        if attack_object == 'img':
+
+
+            iou_chunk1 = compute_iou(ad_low_res_logits[:label_masks_256.shape[0]], label_masks_256).item()
+            if len(args.prompt_type) == 2:
+                iou_chunk2 = compute_iou(ad_low_res_logits[label_masks_256.shape[0]:], label_masks_256).item()
+            else:
+                iou_chunk2 = iou_chunk1
+            
+            print("iou_chunk1:",iou_chunk1, "   iou_chunk2:",iou_chunk2)
+            iou_list.append(str(iou_chunk1)+ ' ' +str(iou_chunk2))
+            
+            if iou_chunk1 + iou_chunk2 < worst_iou_chunk1 + worst_iou_chunk2: 
+                
+                print("update")
+                worst_iou_chunk1, worst_mask_chunk1 = iou_chunk1, \
+                    F.interpolate(ad_masks[:label_masks_256.shape[0]].to(torch.float32), size=(512,512), mode='bilinear', align_corners=False).detach()
+                     
+                worst_iou_chunk2, worst_mask_chunk2 = iou_chunk2, \
+                    F.interpolate(ad_masks[label_masks_256.shape[0]:].to(torch.float32), size=(512,512), mode='bilinear', align_corners=False).detach() \
+                    if len(ad_masks) > len(label_masks_256) else worst_mask_chunk1
+            
+                if 'image' in args.attack_object: best_img = image.detach()
+                if 'points' in args.attack_object: best_points = adv_points.detach()
+                if 'boxes' in args.attack_object: best_boxes = adv_boxes.detach()
+
+        if  'image' in attack_object:
             print('Latent Grad:', latents_last.grad.min(), latents_last.grad.max())
-            # print(latent.min(), latent.max())
             l1_grad = latents_last.grad / torch.norm(latents_last.grad, p=1)
-            print('Img L1 Grad:', l1_grad.min(), l1_grad.max())
+            print('Latent L1 Grad:', l1_grad.min(), l1_grad.max())
             momentum = args.mu * momentum + l1_grad
             adv_latents = adv_latents + torch.sign(momentum) * args.alpha
             noise = (adv_latents - ori_latents).clamp(-args.eps, args.eps)
             adv_latents = ori_latents + noise
             latents = adv_latents.detach()
-        elif attack_object == 'boxes':
+            
+        if 'boxes' in attack_object:
             print('Boxes Grad:', adv_boxes.grad.min(), adv_boxes.grad.max())
             l1_grad = adv_boxes.grad / torch.norm(adv_boxes.grad, p=1)
             print('Box L1 Grad:', l1_grad.min(), l1_grad.max())
-            momentum_boxes = args.mu * momentum + l1_grad
+            momentum_boxes = args.mu * momentum_boxes + l1_grad
             adv_boxes = adv_boxes + torch.sign(momentum_boxes) * args.alpha_boxes # [bs_prompt,]
-
             ori_box_w, ori_box_h = ori_boxes[:,2]-ori_boxes[:,0], ori_boxes[:,3]-ori_boxes[:,1]
-            
             noise = (adv_boxes - ori_boxes).clamp(-args.eps_boxes, args.eps_boxes)
-            #import pdb; pdb.set_trace()
             noise[:,0::2], noise[:,1::2] = noise[:,0::2].clamp(-1*ori_box_w.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale, ori_box_w.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale*1), \
                 noise[:,1::2].clamp(-1*ori_box_h.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale, ori_box_h.unsqueeze(1).expand(-1,2)*args.boxes_noise_scale)
-                        
             adv_boxes = ori_boxes + noise
-            adv_boxes = adv_boxes.detach().clamp(0,1023)
+            adv_boxes = adv_boxes.detach().clamp(0,1023)        
+        
+        if 'points' in attack_object:  #[N k 2]
+            print('Points Grad:', adv_points.grad.min(), adv_points.grad.max())
+            l1_grad = adv_points.grad / torch.norm(adv_points.grad, p=1)
+            print('Points L1 Grad:', l1_grad.min(), l1_grad.max())
+            momentum_points = args.mu * momentum_points + l1_grad
+            from_points = adv_points.clone()
+            adv_points = adv_points + torch.sign(momentum_points) * args.alpha_points # [bs_prompt,]
+
+            ori_box_w, ori_box_h = ori_boxes[:,2]-ori_boxes[:,0], ori_boxes[:,3]-ori_boxes[:,1] # [N]
+            
+            noise = adv_points - ori_points
+            noise = noise.clamp(-args.eps_points, args.eps_points)
+            
+            noise[:,:,0:1], noise[:,:,1:2] = noise[:,:,0:1].clamp(-1*ori_box_w.unsqueeze(-1).unsqueeze(-1).expand(-1,args.point_num,-1)*args.points_noise_scale, ori_box_w.unsqueeze(-1).unsqueeze(-1).expand(-1,args.point_num,-1)*args.points_noise_scale), \
+                noise[:,:,1:2].clamp(-1*ori_box_h.unsqueeze(-1).unsqueeze(-1).expand(-1,args.point_num,-1)*args.points_noise_scale, ori_box_h.unsqueeze(-1).unsqueeze(-1).expand(-1,args.point_num,-1)*args.points_noise_scale),
+            
+            to_move_points = (ori_points + noise).clamp(0,1023)
+            
+            ## Binary Search in-mask adv point
+            for i in range(from_points.shape[0]):
+                for j in range(args.point_num):
+                    from_point = from_points[i,j,:]
+                    to_move_point = to_move_points[i,j,:] 
+                                        
+                    if label_masks[i,0,int(to_move_point[1].item()), int(to_move_point[0].item())] >=128: continue
+                    
+                    l, r = from_point, to_move_point
+                    while(torch.sum(torch.abs(r-l)) > 1e-3):
+                        mid_point = (l + r) / 2
+                        if label_masks[i,0,int(mid_point[1].item()), int(mid_point[0].item())] >= 128: l=mid_point
+                        else: r=mid_point
+                    
+                    to_move_points[i,j,:] = l
+            
+            adv_points = to_move_points
 
     ## show worst result
     image = best_img.detach().cpu().permute(0, 2, 3, 1).numpy()
     image = (image * 255).astype(np.uint8)
-    worst_mask_show = np.zeros((512,512,3))
-    fig, ax = plt.subplots(figsize=(5.12, 5.12))
-    fig.subplots_adjust(left=0, right=1, top=1, bottom=0,wspace=0)
-    ax.axis('off')
-    plt.imshow(image[0]/255)
-        
-    num = origin_len
-    length = 1<<24
-    if args.show_all_masks == True: worst_mask = torch.concat([worst_mask,sup_masks/255])
     
-    for i, single_mask in enumerate(worst_mask):
-        single_mask = single_mask[0].cpu().numpy()
-        pos = int((length-1) *(i+1) / num)
-        color = np.array((pos%256, pos//256%256, pos//(1<<16)))
-        worst_mask_show[single_mask!=0] = color
-        
-        if i < args.prompt_bs:
-            if args.prompt_type == 'box':
-                box= tuple((adv_boxes[i].cpu().numpy()/2).tolist())        
-                show_box(box, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256))
-            else:
-                point = (points[i].cpu().numpy()/2).tolist()
-                show_points(point, labels=[1]*args.point_num, ax=ax, color=(color[0]/256, color[1]/256,color[2]/256),marker_size=100)
-                            
-        show_mask(single_mask, ax=ax, color=np.array((color[0]/256, color[1]/256,color[2]/256,0.4)))
-        
-    fig.canvas.draw()
-    data = fig.canvas.tostring_rgb()
-    width, height = fig.canvas.get_width_height()
-    vis = np.frombuffer(data, dtype=np.uint8).reshape((height, width, 3))
+    vis_chunk1, worst_mask_show_chunk1,  vis_chunk2, worst_mask_show_chunk2 = None, None, None, None
+    if 'points' in args.prompt_type:
+        print("render points")
+        vis_chunk1, worst_mask_show_chunk1 = render_vis(image, worst_mask_chunk1, prompt_type='points', points=best_points)
+    if 'boxes' in args.prompt_type:
+        print("render boxes")
+        print(worst_mask_chunk2.shape)
+        vis_chunk2, worst_mask_show_chunk2 = render_vis(image, worst_mask_chunk2, prompt_type='boxes', boxes=best_boxes)
     
-    return image, best_boxes, worst_mask_show, vis, worst_iou, iou_list, 
+    return image, best_boxes, best_points, vis_chunk1, vis_chunk2, worst_mask_show_chunk1, worst_mask_show_chunk2, worst_iou_chunk1, worst_iou_chunk2, iou_list 
 
 def check_controlnet():
     id = 2    
@@ -882,7 +1107,8 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     
-    controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
+    controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)   
+    
     ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     
     try:
@@ -906,9 +1132,11 @@ if __name__ == '__main__':
     # Prepare save path
     save_path = args.save_root + '/' 
     if args.prefix != "": save_path += args.prefix + '-'
-    save_path += 'Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) + '-AttackObject-' + str(args.attack_object) + '-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_bs) + '-' + str(args.prompt_type) + '-' + str(args.point_num) + \
-        '-Loss-' + str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) + '-Perturbation_Img-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu) + \
-        '-Perturbation_Boxes-' + str(args.eps_boxes) + '-' +str(args.steps)  + '-' + str(args.alpha_boxes) + '-' + str(args.mu) + '-' + str(args.boxes_noise_scale)
+    save_path += 'Attacker-' + str(args.guidance_scale) + '-' +str(args.ddim_steps) + '-AttackObject-' + '_'.join(args.attack_object) + '-Definder-' + args.model + '-' + args.model_type +'-'+ str(args.prompt_bs) + '-' + '_'.join(args.prompt_type) + '-' + str(args.point_num) + \
+        '-Loss-' + str(args.kappa) +'-'+ str(args.gamma) + '-' + str(args.beta) + '-' + str(args.norm) + (('-embedding_sup-' + str(args.embedding_mse_weight)) if args.embedding_sup else '-')  + '-Perturbation_Img-' + str(args.eps) + '-' +str(args.steps)  + '-' + str(args.alpha) + '-' + str(args.mu) + \
+        '-Perturbation_Boxes-' + str(args.eps_boxes) + '-' +str(args.steps)  + '-' + str(args.alpha_boxes) + '-' + str(args.mu) + '-' + str(args.boxes_noise_scale) + \
+        '-Perturbation_Points-' + str(args.eps_points) + '-' +str(args.steps)  + '-' + str(args.alpha_points) + '-' + str(args.mu) + '-' + str(args.points_noise_scale)
+       
     
     if args.random_latent:
         save_path += '-random_latent'
@@ -964,6 +1192,8 @@ if __name__ == '__main__':
             label_masks = torch.cat([label_masks,label_mask_torch.unsqueeze(0).unsqueeze(0)])
         boxes = masks_to_boxes(label_masks.squeeze())
         points = masks_sample_points(label_masks.squeeze(1), k=args.point_num)
+        
+        
         label_masks_256 = F.interpolate(label_masks, size=(256,256), mode='bilinear', align_corners=False) 
         
         # load sup mask for show
@@ -1003,21 +1233,33 @@ if __name__ == '__main__':
         # adversarial optimization
         controller = AttentionStore()
         start = time.time()            
-        worst_img, worst_boxes, worst_mask, vis, worst_iou, iou_list = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,raw_img_norm=raw_img_norm,boxes=boxes, points=points,label_masks_256=label_masks_256, attack_object=args.attack_object)    
+        worst_img, worst_boxes, worst_points, vis_chunk1, vis_chunk2, worst_mask_show_chunk1, worst_mask_show_chunk2, worst_iou_chunk1, worst_iou_chunk2, iou_list = text2image_ldm_stable_last(ldm_stable, [prompt], controller, latent=x_t, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=None, uncond_embeddings=uncond_embeddings, mask_control=control_mask,raw_img=raw_img,raw_img_norm=raw_img_norm,boxes=boxes, points=points, label_masks=label_masks, label_masks_256=label_masks_256, attack_object=args.attack_object)    
         print('Grad Time:', time.time() - start)
         
         # show 
         #import pdb; pdb.set_trace()
+        print('boxes' in args.prompt_type, 'points' in args.prompt_type)
         ptp_utils.view_images([worst_img[0]], prefix=os.path.join(save_path,'adv',name), shuffix='.jpg')
-        ptp_utils.view_images([raw_img_show, mask_show, worst_img[0], worst_mask, vis, str2img(worst_iou)], prefix=os.path.join(save_path,'pair',name), shuffix='.jpg')
+        
+        #import pdb; pdb.set_trace()
+        titles=['Image','GT Mask', 'Worst Image']
+        if 'points' in args.prompt_type: titles += ['Worst_Points_Mask', 'Worst_Vis_Points_Mask', 'Worst_Points_Iou']
+        if 'boxes' in args.prompt_type: titles += ['Worst_Boxes_Mask', 'Worst_Vis_Boxes_Mask', 'Worst_Boxes_Iou']
+                
+        ptp_utils.view_images_with_title([raw_img_show, mask_show, worst_img[0]] +  ([worst_mask_show_chunk1, vis_chunk1, str2img(worst_iou_chunk1)] if 'points' in args.prompt_type else []) + \
+            ([worst_mask_show_chunk2, vis_chunk2, str2img(worst_iou_chunk2)] if 'boxes' in args.prompt_type else []), titles=titles,prefix=os.path.join(save_path,'pair',name), shuffix='.jpg', font_size=50)
         
         # record adversarial iou
         with open(save_path+'/record/'+name+'.txt','w') as f:
-            for i, iou in enumerate(iou_list): 
-                f.write(str(i) + ': ' + str(iou)+'\n')
-            print(worst_iou)
-            f.write('worst iou: ' + str(worst_iou) + ' worst iter: ' + str(iou_list.index(worst_iou)))
-            
-        # record worst boxes
+            for i, iou_pair in enumerate(iou_list): 
+                f.write(str(i) + ': ' + iou_pair+'\n')
+                
+            print(worst_iou_chunk1, worst_iou_chunk2)
+            f.write('worst iou: ' + str(worst_iou_chunk1) + ' ' + str(worst_iou_chunk2)+ ' worst iter: ' + str(iou_list.index(str(worst_iou_chunk1)+' '+str(worst_iou_chunk2))))
+
         with open(save_path+'/adv/'+name+'_boxes.txt','w') as f:
             f.write(str(worst_boxes.detach().cpu().numpy().tolist()))
+        
+        # record worst points  
+        with open(save_path+'/adv/'+name+'_points.txt','w') as f:
+            f.write(str(worst_points.detach().cpu().numpy().tolist()))
