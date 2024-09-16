@@ -15,8 +15,11 @@ import cv2
 from sam_continue_learning.segment_anything_training import sam_model_registry
 import os
 from sam_continue_learning.efficient_sam_training.build_efficient_sam import build_efficient_sam_vitt, build_efficient_sam_vits
+import sys
+sys.path.append('sam_continue_leanring/segment_anything_2_training')
+from sam2.build_sam import build_sam2
 
-def get_model(model, model_type):
+def get_model(model, model_type, model_config=None):
     home_path = 'home_path'
     if model == 'sam':
         if model_type == "vit_b": sam_checkpoint = "sam_continue_learning/pretrained_checkpoint/sam_vit_b_01ec64.pth"
@@ -27,6 +30,16 @@ def get_model(model, model_type):
         sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
         sam.to(device=device)
         return sam
+    elif model == 'sam2':
+
+        if model_type == 'vit_t': sam_checkpoint = "sam_continue_learning/pretrained_checkpoint/sam2_hiera_tiny.pt"
+        
+        device = "cuda"
+        sam = build_sam2(model_config, sam_checkpoint)
+        
+        sam.to(device=device)
+        return sam
+    
     elif model == 'sam_efficient':
         
         if model_type == "vit_t": sam_checkpoint = torch.load("sam_continue_learning/pretrained_checkpoint/efficient_sam_vitt.pt")['model']
