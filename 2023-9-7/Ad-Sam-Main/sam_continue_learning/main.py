@@ -821,23 +821,22 @@ def evaluate(args, net, sam, valid_dataloaders):
             dict_input['original_size'] = images_val_np[0].shape[:2]
             batched_input.append(dict_input)
             
-            with torch.cuda.amp.autocast():
-                if args.serial_prompt:
-                    new_batched_input = []
-                    for i in range((labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0] + args.serial_prompt_size)// args.serial_prompt_size):
-                        serial_slice = slice(i*args.serial_prompt_size, min(i*args.serial_prompt_size+args.serial_prompt_size, labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0]))
-                        new_dict = {}
-                        new_dict['image'] = batched_input[0]['image']
-                        if args.eval_prompt_type == 'boxes': new_dict['boxes'] = batched_input[0]['boxes'][serial_slice]
-                        if args.eval_prompt_type == 'points': 
-                            new_dict['point_coords'] = batched_input[0]['point_coords'][serial_slice]
-                            new_dict['point_labels'] = batched_input[0]['point_labels'][serial_slice]
-                        new_dict['original_size'] = images_val_np[0].shape[:2]
-                        new_batched_input.append(new_dict)
-                    
-                    batched_input = new_batched_input
-                    
-                batched_output, interm_embeddings = sam(batched_input, multimask_output=args.eval_multimask_output)
+            if args.serial_prompt:
+                new_batched_input = []
+                for i in range((labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0] + args.serial_prompt_size)// args.serial_prompt_size):
+                    serial_slice = slice(i*args.serial_prompt_size, min(i*args.serial_prompt_size+args.serial_prompt_size, labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0]))
+                    new_dict = {}
+                    new_dict['image'] = batched_input[0]['image']
+                    if args.eval_prompt_type == 'boxes': new_dict['boxes'] = batched_input[0]['boxes'][serial_slice]
+                    if args.eval_prompt_type == 'points': 
+                        new_dict['point_coords'] = batched_input[0]['point_coords'][serial_slice]
+                        new_dict['point_labels'] = batched_input[0]['point_labels'][serial_slice]
+                    new_dict['original_size'] = images_val_np[0].shape[:2]
+                    new_batched_input.append(new_dict)
+                
+                batched_input = new_batched_input
+                
+            batched_output, interm_embeddings = sam(batched_input, multimask_output=args.eval_multimask_output)
                 
             batch_len = len(batched_output)
             encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
@@ -848,6 +847,7 @@ def evaluate(args, net, sam, valid_dataloaders):
             ious = torch.cat([batched_output[i_l]['iou_predictions'] for i_l in range(batch_len)], dim=0)
 
             if args.baseline:
+                #print(torch.sum(masks), ori_im_path)
                 masks = masks.to(torch.float32) if not args.eval_multimask_output else masks[:,args.mask_id:args.mask_id+1,:,:].to(torch.float32)
                 ious = ious.to(torch.float32) if not args.eval_multimask_output else ious[:,args.mask_id:args.mask_id+1].to(torch.float32)
                 iou_head_prediction_sum += torch.sum(ious).item()
@@ -873,6 +873,11 @@ def evaluate(args, net, sam, valid_dataloaders):
                 
             # print(masks.shape, ious.shape)
             # raise NameError
+            
+            # iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
+            # boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
+            
+            #print(labels_ori.shape)
             iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
             boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
             if args.eval_stability: stability,stability_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
@@ -1040,6 +1045,17 @@ if __name__ == "__main__":
         "adv_points_ext": '_points.txt',
     }
 
+    dataset_sa000000_SSD_adv_imgs_prompt = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+    }
+    
     dataset_sa000138_dci = {"name": "sam1b_sa000138_dci",
         "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000138",
@@ -1067,9 +1083,65 @@ if __name__ == "__main__":
         "im_ext": ".jpg",
         "gt_ext": ""
     }
+    dataset_sa000138_controlnet_plus_no_reward_2 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_no_reward_checkpoint-2_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    dataset_sa000138_controlnet_plus_no_reward_20 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_no_reward_checkpoint-20_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
 
     dataset_sa000138_controlnet_plus_10 = {"name": "sam1b_sa000138_controlnet_plus",
         "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-10_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    dataset_sa000138_controlnet_plus_180 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-180_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    dataset_sa000138_controlnet_plus_200 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-200_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    dataset_sa000138_controlnet_plus_220 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-220_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+
+
+    dataset_sa000138_controlnet_SSD_30000 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/.._ControlNetSDXL_train_output_sdxl_checkpoint-30000_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+
+    dataset_sa000138_controlnet_SSD_40500 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/.._ControlNetSDXL_train_output_sdxl2_checkpoint-40500_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    dataset_sa000138_controlnet_SSD_52000 = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/.._ControlNetSDXL_train_output_sdxl3_checkpoint-2000_controlnet_7.5-20/images/group_1",
         "gt_dir": "../sam-1b/sa_000138",
         "im_ext": ".jpg",
         "gt_ext": ""
@@ -1095,6 +1167,15 @@ if __name__ == "__main__":
         "im_ext": ".jpg",
         "gt_ext": ""
     }
+
+    dataset_sa000138_controlnet_sdxl = {"name": "sam1b_sa000138_controlnet_plus",
+        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/_data_tanglv_xhk_ASAM_2023-12-19_ASAM-Main_ControlNet-main_train_output_sdxl_checkpoint-15000_controlnet_7.5-20/images/group_1",
+        "gt_dir": "../sam-1b/sa_000138",
+        "im_ext": ".jpg",
+        "gt_ext": ""
+    }
+    
+    
     
     dataset_sa000000efficient = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",

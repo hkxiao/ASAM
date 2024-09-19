@@ -252,6 +252,7 @@ class ImageEncoderViT(nn.Module):
         x = x.reshape(x.shape[0], num_patches * num_patches, x.shape[3])
         for blk in self.blocks:
             x = blk(x)
+                
         x = x.reshape(x.shape[0], num_patches, num_patches, x.shape[2])
         x = self.neck(x.permute(0, 3, 1, 2))
         return x

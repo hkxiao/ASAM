@@ -14,12 +14,19 @@ from sam2.modeling.sam.mask_decoder import MaskDecoder
 from sam2.modeling.sam.prompt_encoder import PromptEncoder
 from sam2.modeling.sam.transformer import TwoWayTransformer
 from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
+from sam2.utils.transforms import SAM2Transforms
+from typing import Any, Dict, List, Tuple, Optional, Union
 
 # a large negative value as a placeholder score for missing objects
 NO_OBJ_SCORE = -1024.0
 
 
 class SAM2Base(torch.nn.Module):
+    mask_threshold: float = 0.0
+    image_format: str = "RGB"
+    max_hole_area=0.0,
+    max_sprinkle_area=0.0,
+    
     def __init__(
         self,
         image_encoder,
@@ -91,6 +98,8 @@ class SAM2Base(torch.nn.Module):
         # extra arguments used to construct the SAM mask decoder; if not None, it should be a dict of kwargs to be passed into `MaskDecoder` class.
         sam_mask_decoder_extra_args=None,
         compile_image_encoder: bool = False,
+        pixel_mean: List[float] = [123.675, 116.28, 103.53],
+        pixel_std: List[float] = [58.395, 57.12, 57.375],
     ):
         super().__init__()
 
@@ -187,17 +196,265 @@ class SAM2Base(torch.nn.Module):
                 fullgraph=True,
                 dynamic=False,
             )
-
+        self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
+        self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
+        self._bb_feat_sizes = [
+            (256, 256),
+            (128, 128),
+            (64, 64),
+        ]
+        self._transforms = SAM2Transforms(
+            resolution=self.image_size,
+            mask_threshold=self.mask_threshold,
+            max_hole_area=self.max_hole_area,
+            max_sprinkle_area=self.max_sprinkle_area,
+        )
+        
+        
     @property
     def device(self):
         return next(self.parameters()).device
 
-    def forward(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Please use the corresponding methods in SAM2VideoPredictor for inference."
-            "See notebooks/video_predictor_example.ipynb for an example."
-        )
+    # def forward(self, *args, **kwargs):
+    #     raise NotImplementedError(
+    #         "Please use the corresponding methods in SAM2VideoPredictor for inference."
+    #         "See notebooks/video_predictor_example.ipynb for an example."
+    #     )
 
+    def forward(
+        self,
+        batched_input: List[Dict[str, Any]],
+        multimask_output: bool,
+        normalize_coords=True,
+        multiplexing_mode=True
+    ) -> List[Dict[str, torch.Tensor]]:
+        """
+        Predicts masks end-to-end from provided images and prompts.
+        If prompts are not known in advance, using SamPredictor is
+        recommended over calling the model directly.
+
+        Arguments:
+          batched_input (list(dict)): A list over input images, each a
+            dictionary with the following keys. A prompt key can be
+            excluded if it is not present.
+              'image': The image as a torch tensor in 3xHxW format,
+                already transformed for input to the model.
+              'original_size': (tuple(int, int)) The original size of
+                the image before transformation, as (H, W).
+              'point_coords': (torch.Tensor) Batched point prompts for
+                this image, with shape BxNx2. Already transformed to the
+                input frame of the model.
+              'point_labels': (torch.Tensor) Batched labels for point prompts,
+                with shape BxN.
+              'boxes': (torch.Tensor) Batched box inputs, with shape Bx4.
+                Already transformed to the input frame of the model.
+              'mask_inputs': (torch.Tensor) Batched mask inputs to the model,
+                in the form Bx1xHxW.
+          multimask_output (bool): Whether the model should predict multiple
+            disambiguating masks, or return a single mask.
+
+        Returns:
+          (list(dict)): A list over input images, where each element is
+            as dictionary with the following keys.
+              'masks': (torch.Tensor) Batched binary mask predictions,
+                with shape BxCxHxW, where B is the number of input prompts,
+                C is determined by multimask_output, and (H, W) is the
+                original size of the image.
+              'iou_predictions': (torch.Tensor) The model's predictions
+                of mask quality, in shape BxC.
+              'low_res_logits': (torch.Tensor) Low resolution logits with
+                shape BxCxHxW, where H=W=256. Can be passed as mask input
+                to subsequent iterations of prediction.
+        """
+        def preprocess(x: torch.Tensor) -> torch.Tensor:
+            """Normalize pixel values and pad to a square input."""
+            # Normalize colors
+            x = (x - self.pixel_mean) / self.pixel_std
+
+            return x
+        
+        def _prep_prompts(
+            point_coords, point_labels, box, mask_logits, normalize_coords
+        ):
+
+            unnorm_coords, labels, unnorm_box, mask_input = None, None, None, None
+            if point_coords is not None:
+                assert (
+                    point_labels is not None
+                ), "point_labels must be supplied if point_coords is supplied."
+                point_coords = torch.as_tensor(
+                    point_coords, dtype=torch.float, device=self.device
+                )
+                unnorm_coords = self._transforms.transform_coords(
+                    point_coords, normalize=normalize_coords, orig_hw=(1024, 1024)
+                )
+                labels = torch.as_tensor(point_labels, dtype=torch.int, device=self.device)
+                if len(unnorm_coords.shape) == 2:
+                    unnorm_coords, labels = unnorm_coords[None, ...], labels[None, ...]
+            if box is not None:
+                box = torch.as_tensor(box, dtype=torch.float, device=self.device)
+                unnorm_box = self._transforms.transform_boxes(
+                    box, normalize=normalize_coords, orig_hw=(1024, 1024)
+                )  # Bx2x2
+            if mask_logits is not None:
+                mask_input = torch.as_tensor(
+                    mask_logits, dtype=torch.float, device=self.device
+                )
+                if len(mask_input.shape) == 3:
+                    mask_input = mask_input[None, :, :, :]
+            return mask_input, unnorm_coords, labels, unnorm_box
+
+        def _predict(
+            _features,
+            point_coords: Optional[torch.Tensor],
+            point_labels: Optional[torch.Tensor],
+            boxes: Optional[torch.Tensor] = None,
+            mask_input: Optional[torch.Tensor] = None,
+            multimask_output: bool = True,
+            return_logits: bool = False,
+            img_idx: int = -1,
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """
+            Predict masks for the given input prompts, using the currently set image.
+            Input prompts are batched torch tensors and are expected to already be
+            transformed to the input frame using SAM2Transforms.
+
+            Arguments:
+            point_coords (torch.Tensor or None): A BxNx2 array of point prompts to the
+                model. Each point is in (X,Y) in pixels.
+            point_labels (torch.Tensor or None): A BxN array of labels for the
+                point prompts. 1 indicates a foreground point and 0 indicates a
+                background point.
+            boxes (np.ndarray or None): A Bx4 array given a box prompt to the
+                model, in XYXY format.
+            mask_input (np.ndarray): A low resolution mask input to the model, typically
+                coming from a previous prediction iteration. Has form Bx1xHxW, where
+                for SAM, H=W=256. Masks returned by a previous iteration of the
+                predict method do not need further transformation.
+            multimask_output (bool): If true, the model will return three masks.
+                For ambiguous input prompts (such as a single click), this will often
+                produce better masks than a single prediction. If only a single
+                mask is needed, the model's predicted quality score can be used
+                to select the best mask. For non-ambiguous prompts, such as multiple
+                input prompts, multimask_output=False can give better results.
+            return_logits (bool): If true, returns un-thresholded masks logits
+                instead of a binary mask.
+
+            Returns:
+            (torch.Tensor): The output masks in BxCxHxW format, where C is the
+                number of masks, and (H, W) is the original image size.
+            (torch.Tensor): An array of shape BxC containing the model's
+                predictions for the quality of each mask.
+            (torch.Tensor): An array of shape BxCxHxW, where C is the number
+                of masks and H=W=256. These low res logits can be passed to
+                a subsequent iteration as mask input.
+            """
+
+            if point_coords is not None:
+                concat_points = (point_coords, point_labels)
+            else:
+                concat_points = None
+
+            # Embed prompts
+            if boxes is not None:
+                box_coords = boxes.reshape(-1, 2, 2)
+                box_labels = torch.tensor([[2, 3]], dtype=torch.int, device=boxes.device)
+                box_labels = box_labels.repeat(boxes.size(0), 1)
+                # we merge "boxes" and "points" into a single "concat_points" input (where
+                # boxes are added at the beginning) to sam_prompt_encoder
+                if concat_points is not None:
+                    concat_coords = torch.cat([box_coords, concat_points[0]], dim=1)
+                    concat_labels = torch.cat([box_labels, concat_points[1]], dim=1)
+                    concat_points = (concat_coords, concat_labels)
+                else:
+                    concat_points = (box_coords, box_labels)
+
+            sparse_embeddings, dense_embeddings = self.sam_prompt_encoder(
+                points=concat_points,
+                boxes=None,
+                masks=mask_input,
+            )
+
+            # Predict masks
+            batched_mode = (
+                concat_points is not None and concat_points[0].shape[0] > 1
+            )  # multi object prediction
+            high_res_features = [
+                feat_level[img_idx].unsqueeze(0)
+                for feat_level in _features["high_res_feats"]
+            ]
+            
+            low_res_masks, iou_predictions, _, _ = self.sam_mask_decoder(
+                image_embeddings=_features["image_embed"][img_idx].unsqueeze(0),
+                image_pe=self.sam_prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=multimask_output,
+                repeat_image=batched_mode,
+                high_res_features=high_res_features,
+            )
+
+            masks = F.interpolate(low_res_masks, (1024,1024), mode="bilinear", align_corners=False)
+            
+            masks = masks > self.mask_threshold
+
+            return masks, iou_predictions, low_res_masks
+    
+    
+        input_images = torch.stack([preprocess(x["image"]) for x in batched_input], dim=0)
+        
+        batch_size = input_images.shape[0]
+        
+        backbone_out = self.forward_image(input_images)
+        _, vision_feats, _, _ = self._prepare_backbone_features(backbone_out)    
+
+        # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
+        if self.directly_add_no_mem_embed:
+            vision_feats[-1] = vision_feats[-1] + self.no_mem_embed
+        
+        feats = [
+            feat.permute(1, 2, 0).view(batch_size, -1, *feat_size)
+            for feat, feat_size in zip(vision_feats[::-1], self._bb_feat_sizes[::-1])
+        ][::-1]
+        _features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
+        
+        outputs = []
+        for img_idx, image_record in enumerate(batched_input):
+            
+            point_coords=image_record.get("point_coords", None)
+            point_labels=image_record.get("point_labels", None)
+            box=image_record.get("boxes", None)
+            mask_input=image_record.get("mask_inputs", None)
+            
+            mask_input, unnorm_coords, labels, unnorm_box = _prep_prompts(
+                point_coords,
+                point_labels,
+                box,
+                mask_input,
+                normalize_coords
+            )
+            
+            masks, iou_predictions, low_res_masks = _predict(
+                _features,
+                unnorm_coords,
+                labels,
+                unnorm_box,
+                mask_input,
+                multimask_output,
+                return_logits=True,
+                img_idx=img_idx,
+            )
+            
+            outputs.append(
+                {
+                    "masks": masks,
+                    "iou_predictions": iou_predictions,
+                    "low_res_logits": low_res_masks,
+                }
+            )
+            
+        return outputs, _features
+    
     def _build_sam_heads(self):
         """Build SAM-style prompt encoder and mask decoder."""
         self.sam_prompt_embed_dim = self.hidden_dim
@@ -827,3 +1084,16 @@ class SAM2Base(torch.nn.Module):
         # don't overlap (here sigmoid(-10.0)=4.5398e-05)
         pred_masks = torch.where(keep, pred_masks, torch.clamp(pred_masks, max=-10.0))
         return pred_masks
+    
+    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize pixel values and pad to a square input."""
+        # Normalize colors
+        x = (x - self.pixel_mean) / self.pixel_std
+
+        # Pad
+        h, w = x.shape[-2:]
+        padh = self.image_size - h
+        padw = self.image_size - w
+        x = F.pad(x, (0, padw, 0, padh))
+        return x
+    

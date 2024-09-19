@@ -730,6 +730,17 @@ if __name__ == "__main__":
         
     ## Train dataset
 
+    dataset_sa000000_SSD_adv_imgs_prompt = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+    }
+    
     dataset_lecun = {"name": "lecun_sam_subset",
         "im_dir": "../lecun_photo",
         "gt_dir": "../lecun_photo",
@@ -1080,7 +1091,7 @@ if __name__ == "__main__":
         "im_ext": ".tif",
         "gt_ext": ".tif"
     }
-    
+
     
     args = get_args_parser()
     if not args.eval:   
