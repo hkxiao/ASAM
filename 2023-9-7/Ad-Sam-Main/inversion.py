@@ -2,7 +2,7 @@ from typing import Optional, Union, Tuple, List, Callable, Dict
 from tqdm import tqdm, trange
 import torch
 import os
-from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from diffusers import StableDiffusionControlNetPipeline, StableDiffusionXLPipeline ,ControlNetModel
 from diffusers import DDIMScheduler
 
 import torch.nn.functional as nnf
@@ -21,12 +21,14 @@ from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from skimage.metrics import mean_squared_error as compare_mse
 from pycocotools import mask
 import argparse
+import sys
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
 # model setting
 parser.add_argument('--model', type=str, default='sam', help='cnn')
 parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
+parser.add_argument('--aigc_model_type', type=str, default='SD1.5', help='cnn')
 
 # base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
@@ -34,6 +36,7 @@ parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
 parser.add_argument('--check_controlnet', action='store_true')
 parser.add_argument('--check_inversion', action='store_true')
+parser.add_argument('--check_crash', action='store_true')
 
 # inversion setting
 parser.add_argument('--inversion_type', type=str, default='null_text_inversion')
@@ -48,6 +51,7 @@ parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, he
 parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')    
 parser.add_argument('--caption_path', default='/data/tanglv/data/sam-1b/sa_000000-blip2-caption.json', type=str, help='random seed')    
 parser.add_argument('--controlnet_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')
+parser.add_argument('--sd_path', default='ckpt/control_v11p_sd15_mask_sa000000.pth', type=str, help='random seed')
 args = parser.parse_args()
 print(args)
 
@@ -476,6 +480,7 @@ class NullInversion:
                 latents = latents * 0.18215
         return latents
 
+    # To Do for SD-xl: 
     @torch.no_grad()
     def init_prompt(self, prompt: str):
         uncond_input = self.model.tokenizer(
@@ -483,6 +488,7 @@ class NullInversion:
             return_tensors="pt"
         )
         uncond_embeddings = self.model.text_encoder(uncond_input.input_ids.to(self.model.device))[0]
+        
         text_input = self.model.tokenizer(
             [prompt],
             padding="max_length",
@@ -498,6 +504,7 @@ class NullInversion:
     def ddim_loop(self, latent, mask):
         uncond_embeddings, cond_embeddings = self.context.chunk(2)
         all_latent = [latent]
+        
         latent = latent.clone().detach()
         for i in range(NUM_DDIM_STEPS):
             t = self.model.scheduler.timesteps[len(self.model.scheduler.timesteps) - i - 1]
@@ -519,6 +526,7 @@ class NullInversion:
 
     def null_optimization(self, latents, mask, num_inner_steps, epsilon):
         uncond_embeddings, cond_embeddings = self.context.chunk(2)
+        
         uncond_embeddings_list = []
         latent_cur = latents[-1]
         bar = tqdm(total=num_inner_steps * NUM_DDIM_STEPS)
@@ -944,7 +952,7 @@ def text2image_ldm_stable(
     guidance_scale: Optional[float] = 7.5,
     generator: Optional[torch.Generator] = None,
     latent: Optional[torch.FloatTensor] = None,
-    mask_control: Optional[torch.tensor] = None,
+    mask_control: Optional[torch.Tensor] = None,
     uncond_embeddings=None,
     noise_loss_list=None,
     start_time=50,
@@ -978,10 +986,11 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
+
         latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, context, t, guidance_scale, low_resource=False,guess_mode=args.guess_mode)
-        
         if noise_loss_list: latents = latents + noise_loss_list[i]
-        
+        #print(torch.max(context), torch.min(context), torch.max(latents),  torch.min(latents), torch.max(noise_loss_list[i]), torch.min(noise_loss_list[i]))
+    
     if return_type == 'image':
         image = ptp_utils.latent2image(model.vae, latents)
     else:
@@ -1036,8 +1045,17 @@ def check_inversion():
     
     run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=uncond_embeddings, verbose=True, prefix='check_inversion')
 
-
+def check_crash():
+    # Inversion loop
+    for i in range(args.start, args.end+1):
+        if not os.path.exists(os.path.join(args.save_root, 'embeddings', 'sa_'+str(i)+'_latent.pth')) and \
+         os.path.exists(os.path.join(args.data_root, 'sa_'+str(i)+'.jpg')):
+            sys.exit(-1)
+    sys.exit(0)
+    
 if __name__ == '__main__':
+    if args.check_crash: check_crash()
+    
     # Load Stable Diffusion 
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     MY_TOKEN = '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'
@@ -1046,19 +1064,20 @@ if __name__ == '__main__':
     GUIDANCE_SCALE = args.guidence_scale
     MAX_NUM_WORDS = 77
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)    
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained("ckpt/stable-diffusion-v1-5", use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
+    
+    if 'pth' in args.controlnet_path : controlnet = ControlNetModel.from_single_file(args.controlnet_path).to(device)
+    else: controlnet = ControlNetModel.from_pretrained(args.controlnet_path).to(device)
+    
+    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained(args.sd_path, use_auth_token=MY_TOKEN,controlnet=controlnet, scheduler=scheduler).to(device)
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
         print("Attribute disable_xformers_memory_efficient_attention() is missing")
     tokenizer = ldm_stable.tokenizer
-    
-    # Load null text inversion
-    # if args.inversion_type == "null_text_inversion": inversion = NullInversion(ldm_stable)
-    # elif args.inversion_type == "direct_inversion": inversion = DirectInversion(ldm_stable, num_ddim_steps=args.ddim_steps)
+    if args.aigc_model_type == 'SDXL': tokenizer_2 = ldm_stable.tokenizer_2
     
     inversion = NullInversion(ldm_stable)
+    
     # Load Caption
     captions = {}
     with open(args.caption_path,'r') as f:
@@ -1078,21 +1097,26 @@ if __name__ == '__main__':
     if not os.path.exists(os.path.join(args.save_root , 'inv')): os.mkdir(os.path.join(args.save_root , 'inv'))
     if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
-    names = sorted(os.listdir(args.data_root))
-    names = [name[:-4] for name in names if '.jpg' in name]
-    if args.end != -1:
-        names = names[args.start:args.end+1]
-    else:
-        names = names[args.start:]
-    print()
+    # names = sorted(os.listdir(args.data_root))
+    # names = [name[:-4] for name in names if '.jpg' in name]
+    # if args.end != -1:
+    #     names = names[args.start:args.end+1]
+    # else:
+    #     names = names[args.start:]
     
-    print(names)    
+    # print(names)    
     # Adversarial optimization loop
-    for name in tqdm(names):
+    # for name in tqdm(names):
+
+    for i in range(args.start, args.end):
+        name = 'sa_' + str(i)
+        img_path = args.data_root+'/'+name+'.jpg'
+        control_mask_path = args.control_mask_dir+'/'+name+'.png'
         
         # prepare img & control mask path
-        img_path = os.path.join(args.data_root, name + '.jpg')
-        control_mask_path = os.path.join(args.control_mask_dir, name + '.png')
+        # img_path = os.path.join(args.data_root, name + '.jpg')
+        # control_mask_path = os.path.join(args.control_mask_dir, name + '.png')
+        
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
@@ -1102,7 +1126,7 @@ if __name__ == '__main__':
         uncond_path = f"{args.save_root}/embeddings/{name}_uncond.pth"
         if os.path.exists(latent_path) and os.path.exists(uncond_path):
             print(latent_path, uncond_path, " has existed!")
-            #continue
+            continue
         
         # load catpion
         if img_path.split('/')[-1] in captions:
@@ -1126,11 +1150,6 @@ if __name__ == '__main__':
         elif args.inversion_type == 'direct_inversion':
             (image_gt, image_rec), x_t, noise_loss_list = inversion.direct_invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt)        
         
-        # print(type(ddim_latents))
-        print(x_t.shape, noise_loss_list[0].shape)
-        # print(len(noise_loss_list))
-        # # import pdb; pdb.set_trace()
-        
         print('Inversion Time:', time.time() - start)
         
         if uncond_embeddings: gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)        
@@ -1139,7 +1158,7 @@ if __name__ == '__main__':
         # save x_t & uncond_emb
         torch.save(x_t, f'{args.save_root}/embeddings/{name}_latent.pth')
         if uncond_embeddings: torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/{name}_uncond.pth')
-        if uncond_embeddings: torch.save(gather_noise_loss, f'{args.save_root}/embeddings/{name}_noise_loss.pth')
+        if noise_loss_list: torch.save(gather_noise_loss, f'{args.save_root}/embeddings/{name}_noise_loss.pth')
         
         # show 
         controller = AttentionStore()
