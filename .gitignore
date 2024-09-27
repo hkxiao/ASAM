@@ -159,4 +159,6 @@ dmypy.json
 *.jpeg
 *.JPEG
 *.tar.gz
-
+**/wandb
+**/train_output_sdxl2
+**/train_output_sdxl4
