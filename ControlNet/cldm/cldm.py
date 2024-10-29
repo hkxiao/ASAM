@@ -281,7 +281,9 @@ class ControlNet(nn.Module):
     def make_zero_conv(self, channels):
         return TimestepEmbedSequential(zero_module(conv_nd(self.dims, channels, channels, 1, padding=0)))
 
-    def forward(self, x, hint, timesteps, context, **kwargs):
+    def forward(self, x, hint, timesteps, context, **kwargs): 
+
+        #hint: [N, 3, 512, 512] range～[0,1]
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
@@ -290,6 +292,15 @@ class ControlNet(nn.Module):
         outs = []
 
         h = x.type(self.dtype)
+        
+        # import cv2
+        # import numpy
+        # print(torch.max(hint), torch.min(hint))
+        # img = hint[0,...].permute(1,2,0).detach().cpu().numpy()*255.0
+        # print(img.shape)
+        # cv2.imwrite("demo.jpg", img)
+        # raise NameError
+    
         for module, zero_conv in zip(self.input_blocks, self.zero_convs):
             if guided_hint is not None:
                 h = module(h, emb, context)
@@ -317,13 +328,14 @@ class ControlLDM(LatentDiffusion):
     @torch.no_grad()
     def get_input(self, batch, k, bs=None, *args, **kwargs):
         x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
+        
         control = batch[self.control_key]
         if bs is not None:
             control = control[:bs]
         control = control.to(self.device)
         control = einops.rearrange(control, 'b h w c -> b c h w')
         control = control.to(memory_format=torch.contiguous_format).float()
-        return x, dict(c_crossattn=[c], c_concat=[control])
+        return x, dict(c_crossattn=[c], c_concat=[control]) # torch.Size([2, 4, 64, 64]) torch.Size([2, 77, 768]) torch.Size([2, 3, 512, 512])
 
     def apply_model(self, x_noisy, t, cond, *args, **kwargs):
         assert isinstance(cond, dict)
