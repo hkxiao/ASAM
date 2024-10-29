@@ -29,6 +29,23 @@ class ImageLogger(Callback):
         root = os.path.join(save_dir, "image_log", split)
         for k in images:
             grid = torchvision.utils.make_grid(images[k], nrow=4)
+            if grid.shape[0]!=3:
+                grid = grid[:3]
+                
+                # grid = grid.permute(1,2,0).view(512*512,-1) #[C H W] -> [HW C]
+                # target_dim = 3
+                # mean = torch.mean(grid, dim=0, keepdim=True)
+                # centered_features = grid - mean
+                
+                # U, S, V = torch.pca_lowrank(centered_features, q=target_dim)
+                # reduced_features = torch.matmul(centered_features, V[:, :target_dim]) # (t_x+t_y)x(d)    
+                
+                # grid_min = grid.min(dim=0,keepdim=True)[0].view(1,1,-1)
+                # grid_max = grid.max(dim=0,keepdim=True)[0].view(1,1,-1)
+                # grid = (grid - grid_min) / (grid_max - grid_min)
+
+                # grid = reduced_features.reshape(512,512,target_dim).permute(2,0,1) # [[HW C] -> [C H W]  
+            
             if self.rescale:
                 grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
             grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
@@ -73,4 +90,5 @@ class ImageLogger(Callback):
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         if not self.disabled:
+            pass
             self.log_img(pl_module, batch, batch_idx, split="train")

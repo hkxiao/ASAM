@@ -21,6 +21,18 @@ import utils.misc as misc
 from torch.optim.lr_scheduler import LambdaLR, StepLR
 from pathlib import Path
 import sys
+import copy
+import sys
+sys.path.append('sam2')
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+from PIL import Image
+sys.path.append('SAMed')
+#from SAMed.sam_lora_image_encoder import LoRA_Sam
+import yaml
+# sys.path.append('SAM-Adapter-PyTorch')
+# import models
+import copy
 
 
 def print_current_line(current_frame):
@@ -74,7 +86,7 @@ class MLP(nn.Module):
         return x
 
 class MaskDecoder_Tuning(MaskDecoder):
-    def __init__(self, model_type):
+    def __init__(self, model_type, tuning_manner='output_tokens'):
         super().__init__(transformer_dim=256,
                         transformer=TwoWayTransformer(
                                 depth=2,
@@ -85,7 +97,7 @@ class MaskDecoder_Tuning(MaskDecoder):
                         num_multimask_outputs=3,
                         activation=nn.GELU,
                         iou_head_depth= 3,
-                        iou_head_hidden_dim= 256,)
+                        iou_head_hidden_dim= 256)
         """
         Predicts masks given an image and prompt embeddings, using a
         tranformer architecture.
@@ -104,17 +116,19 @@ class MaskDecoder_Tuning(MaskDecoder):
         """
         assert model_type in ["vit_b","vit_l","vit_h"]
         
-        checkpoint_dict = {"vit_b": os.path.join(args.load_prefix,"pretrained_checkpoint/sam_vit_b_maskdecoder.pth"),
-                           "vit_l":"pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
-                           'vit_h':"pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
+        checkpoint_dict = {"vit_b": os.path.join(args.load_prefix,"../pretrained/sam_vit_b_maskdecoder.pth"),
+                           "vit_l":"../pretrained/sam_vit_l_maskdecoder.pth",
+                           'vit_h':"../pretrained/sam_vit_h_maskdecoder.pth"}
         checkpoint_path = checkpoint_dict[model_type]
         self.load_state_dict(torch.load(checkpoint_path))
         print("Tune Decoder init from SAM MaskDecoder")
-        for n,p in self.named_parameters():
-            if 'mask_tokens' not in n and 'iou_token' not in n:
-                p.requires_grad = False
-            else :
-                print(p.shape)
+        
+        if tuning_manner == 'output_tokens':
+            for n,p in self.named_parameters():
+                if 'mask_tokens' not in n and 'iou_token' not in n:
+                    p.requires_grad = False
+                else :
+                    print('Second Stege MaksDecoder:', n, 'need gradient', p.shape)
 
     def forward(
         self,
@@ -207,7 +221,8 @@ class MaskDecoder_Tuning(MaskDecoder):
         return masks, iou_pred
 
 
-def show_anns(labels_val, masks, input_point, input_label, input_box, filename, image, ious, boundary_ious):
+
+def show_anns(labels_val, masks, input_point, input_label, input_box, filename, image, ious, boundary_ious, save_gt=True, suffix="", boxes_color=""):
     if len(masks) == 0: return
     
     #import pdb; pdb.set_trace()
@@ -216,18 +231,21 @@ def show_anns(labels_val, masks, input_point, input_label, input_box, filename, 
         plt.imshow(image)
         show_mask(label_val/255.0, plt.gca(), label_mode=True) 
         plt.axis('off')
-        plt.savefig(filename+'_'+str(i)+'_gt.jpg',bbox_inches='tight',pad_inches=-0.1)
+        if save_gt: plt.savefig(filename+'_'+str(i)+'_gt.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close() 
         
         plt.figure(figsize=(10,10))
         plt.imshow(image)
         show_mask(mask, plt.gca())
         if input_box is not None:
-            show_box(input_box[i], plt.gca())
+            show_box(input_box[i], plt.gca(), color=boxes_color)
         if (input_point is not None) and (input_label is not None): 
             show_points(input_point[i], input_label[i], plt.gca())
         plt.axis('off')
-        plt.savefig(filename+'_'+str(i)+'.jpg',bbox_inches='tight',pad_inches=-0.1)
+        
+        #print(filename+'_'+str(i)+'.jpg',)
+        if suffix=="": plt.savefig(filename+'_'+str(i)+'.jpg',bbox_inches='tight',pad_inches=-0.1)
+        else: plt.savefig(filename+'_'+str(i)+'_'+suffix+'.jpg',bbox_inches='tight',pad_inches=-0.1)
         plt.close()
 
 def show_anns2(labels_val, masks, input_point, input_box, input_label, filename, image, ious, boundary_ious):
@@ -257,14 +275,18 @@ def record_iou(filename, ious, boundary_ious):
         with open(filename+'_'+str(i)+'.txt','w') as f:
             f.write(str(round(iou.item()*100,2)))
   
-def record_stability(filename, stabilitys):
+def record_stability(filename, stabilitys, stabilityious):
     if len(stabilitys) == 0: return
 
     for i, iou in enumerate(stabilitys):
         with open(filename+'_'+str(i)+'_stability.txt','w') as f:
             f.write(str(round(iou.item()*100,2)))
+        
+        for j in range(args.stable_iter):
+            with open(filename+'_'+str(i)+'_'+str(j)+'.txt','w') as f:
+                f.write(str(round(stabilityious[i * args.stable_iter + j].item()*100,2)))
             
-def show_points(coords, labels, ax, marker_size=175):
+def show_points(coords, labels, ax, marker_size=500):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
     ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
@@ -281,10 +303,10 @@ def show_mask(mask, ax, label_mode=False,random_color=False):
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
       
-def show_box(box, ax):
+def show_box(box, ax, color):
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor=color, facecolor=(0,0,0,0), lw=12))    
 
 def compute_stability_refer_StableSAM(masks, labels_ori):
     
@@ -298,13 +320,19 @@ def compute_stability_refer_StableSAM(masks, labels_ori):
     stability, stability_list = 0, []
     
     for i in range(groups):
-        x, y = compute_iou(masks[i*N:i*N+N,...],masks_union )
+        #import pdb; pdb.set_trace()
+        #print(masks_union.shape, labels_ori.shape,masks.shaoe)
+        if args.eval_stability_with == 'union': x, y = compute_iou(masks[i*N:i*N+N,...], masks_union )
+        if args.eval_stability_with == 'gt': 
+            x, y = compute_iou(masks[i*N:i*N+N,...], labels_ori.unsqueeze(1))
+                
         stability += x
         stability_list.extend(y)
 
+    iou_list = copy.deepcopy(stability_list)
     stability_list = [sum(stability_list[i::N])/groups for i in range(N)]
     
-    return stability / groups, stability_list 
+    return stability / groups, stability_list, iou_list
 
 def get_args_parser():
     
@@ -329,6 +357,8 @@ def get_args_parser():
                         help="The path to the hq_decoder training checkpoint for evaluation")
     parser.add_argument("--restore-sam-model", type=str,
                         help="The path to the hq_decoder training checkpoint for evaluation")
+    parser.add_argument("--restore-sam-model-keys", type=str, default=None,
+                        help="The path to the hq_decoder training checkpoint for evaluation")
     parser.add_argument('--train-datasets', nargs='+')
     parser.add_argument('--valid-datasets', nargs='+')
     parser.add_argument('--load_prefix', default='')
@@ -336,21 +366,32 @@ def get_args_parser():
     parser.add_argument('--input_batch', type=int, default=-1)
     
     # SAM setting
+    parser.add_argument("--sam-type", type=str, default="sam", 
+                        help="The type of model to load, in ['sam' ,'sam2', 'sam2.1', 'efficient-sam']")
+        
     parser.add_argument("--model-type", type=str, default="vit_l", 
                         help="The type of model to load, in ['vit_h', 'vit_l', 'vit_b']")
+    parser.add_argument("--model-config", type=str, default="cuda", 
+                        help="The device to run generation on.")
     parser.add_argument("--device", type=str, default="cuda", 
                         help="The device to run generation on.")
     parser.add_argument('--baseline', action='store_true')
     
     # Tuning Decoder setting
-    parser.add_argument('--tuning_part', default='output_token', choices=['output_token','decoder'])
-
+    parser.add_argument('--tuning_manner', default='output_tokens', choices=['output_tokens','decoder', 'full_weights', 'lora', 'adaptor'])
+    parser.add_argument('--adaptor_config', type=str, default="")
+    parser.add_argument('--two_stage', type=str2bool, default=True)
+    
     # Base Learning Rate Setting & Epoch
     parser.add_argument('--learning_rate', default=5e-3, type=float)
     parser.add_argument('--start_epoch', default=0, type=int)
     parser.add_argument('--max_epoch_num', default=10, type=int)
     parser.add_argument('--serial_prompt', type=str2bool, default=True)
     parser.add_argument('--serial_prompt_size', type=int, default=900)
+
+    # loss
+    parser.add_argument('--alpha', type=float, default=1.0)
+    parser.add_argument('--beta', type=float, default=1.0)
     
     # Step Learning Rate
     parser.add_argument('--lr_drop_epoch', default=10, type=int)
@@ -370,13 +411,12 @@ def get_args_parser():
     parser.add_argument('--batch_size_valid', default=1, type=int)
     parser.add_argument('--eval_prompt_type', default='boxes')
     parser.add_argument('--train_prompt_types', nargs='+')
+    parser.add_argument('--train_point_num', nargs='+')
     parser.add_argument('--point_num', type=int, default=10)
-
-    # Adv Prompot Setting
-    parser.add_argument('--adv_prompt_training', type= str2bool, default=False)
 
     # Prompt Stability Setting    
     parser.add_argument('--eval_stability',  type= str2bool, default=False)
+    parser.add_argument('--eval_stability_with',  type= str, default='gt')
     parser.add_argument('--stable_iter', default=10, type=int)
     parser.add_argument('--boxes_noise_scale', default=0.2, type=float)
     parser.add_argument('--points_noise_scale', default=0.2, type=float)
@@ -393,6 +433,7 @@ def get_args_parser():
     # Output Setting
     parser.add_argument("--output_prefix", type=str, required=False, 
                         help="Path to the directory where masks and checkpoints will be output")
+    parser.add_argument('--only_output_prefix', type=str2bool, default=False)
     parser.add_argument('--visualize', action='store_true')
     parser.add_argument('--eval_record', type=str2bool, default=False)
     parser.add_argument('--visualize2', action='store_true')
@@ -430,19 +471,15 @@ def main(train_datasets, valid_datasets, args):
     ### --- Step 1: Train or Valid dataset ---
     if not args.eval:
         print("--- create training dataloader ---")
-        train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train", limit=args.train_img_num,adv_prompt_training=args.adv_prompt_training)
-        
+        train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train", limit=args.train_img_num)
         train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
-                                                        my_transforms = [
-                                                                    RandomHFlip(),
-                                                                    LargeScaleJitter()  ##这个data augmentation可能会让mask全为0
-                                                                    ] if args.data_augmentation else [Resize(args.input_size)],
+                                                        my_transforms = None,
                                                         batch_size = args.batch_size_train,
                                                         batch_size_prompt = args.batch_size_prompt,
                                                         batch_size_prompt_start = args.batch_size_prompt_start,
                                                         training = True,
-                                                        adv_prompt_training=args.adv_prompt_training,
-                                                        numworkers=args.numworkers)
+                                                        numworkers=args.numworkers,
+                                                        args=args)
         print(len(train_dataloaders), " train dataloaders created")
 
     print("--- create valid dataloader ---")
@@ -458,48 +495,102 @@ def main(train_datasets, valid_datasets, args):
     print(len(valid_dataloaders), " valid dataloaders created")
     
     ### --- Step 2: Model for DistributedDataParallel---
-    net = MaskDecoder_Tuning(args.model_type) 
-    if args.compile: net = torch.compile(net)
-    if torch.cuda.is_available():
-        net.cuda()
-    net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-    net_without_ddp = net.module
-    
-    if args.restore_model:
-        print("restore model from:", args.restore_model)
-        if torch.cuda.is_available():
-            net_without_ddp.load_state_dict(torch.load(args.restore_model))
-        else:
+    if args.sam_type == 'sam':
+        net = MaskDecoder_Tuning(args.model_type, args.tuning_manner) 
+        if args.compile: net = torch.compile(net)
+        if torch.cuda.is_available(): net.cuda()
+        net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+        net_without_ddp = net.module
+        
+        if args.restore_model:
+            print("restore model from:", args.restore_model)
             net_without_ddp.load_state_dict(torch.load(args.restore_model, map_location="cpu"))
 
+        parameters_grad, parameters_no_grad = 0, 0
+        for n,p in net_without_ddp.named_parameters():
+            if p.requires_grad: parameters_grad += 1
+            else: parameters_no_grad += 1
+        print("Second Stage Decoder parameters_grad Number:", parameters_grad)
+        print("Second Stage Decoder parameters_no_grad Number:", parameters_no_grad)
+    
+    # To Do
+    elif args.sam_type == 'sam2' or args.sam_type == 'sam2.1':
+        net = MaskDecoder_Tuning('vit_b', args.tuning_manner) 
+        if args.compile: net = torch.compile(net)
+        if torch.cuda.is_available(): net.cuda()
+        net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+        net_without_ddp = net.module
+        
+        
+    if args.sam_type == 'sam':
+        sam_checkpoint_map = {
+            'vit_b': os.path.join(args.load_prefix,'../pretrained/sam_vit_b_01ec64.pth'),
+            'vit_l': '../pretrained/sam_vit_l_0b3195.pth',
+            'vit_h': '../pretrained/sam_vit_h_4b8939.pth',
+        }
+    elif args.sam_type == 'sam2':
+        sam_checkpoint_map = {
+            'vit_t':  '../pretrained/sam2_hiera_tiny.pt',
+        }
+    elif args.sam_type == 'sam2.1':
+        sam_checkpoint_map = {
+            'vit_t':  '../pretrained/sam2.1_hiera_tiny.pt',
+        }
+
+    if args.sam_type == 'sam':
+        if 'adaptor' in args.tuning_manner:
+            with open(args.adaptor_config, 'r') as f:
+                adaptor_config = yaml.load(f, Loader=yaml.FullLoader)
+            sam = models.make(adaptor_config['model']).cuda()
+            for name, para in sam.named_parameters():
+                if "image_encoder" in name and "prompt_generator" not in name:
+                    para.requires_grad_(False)
+            sam.load_state_dict(torch.load(sam_checkpoint_map[args.model_type]), strict=False)
+        else: sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
+        
+        if args.tuning_manner == 'lora': sam = LoRA_Sam(sam, r=4).cuda() 
+    elif args.sam_type == 'sam2' or args.sam_type == 'sam2.1':
+        sam = build_sam2(args.model_config, sam_checkpoint_map[args.model_type])
+        predictor = SAM2ImagePredictor(sam)
+        
+        # ['output_tokens','decoder']
+        if args.tuning_manner ==  'output_tokens':
+            for n,p in sam.named_parameters():
+                if 'mask_tokens' not in n and 'iou_token' not in n and 'obj_score_token' not in n:
+                    p.requires_grad = False
+                else :
+                    print('SAM2:', n, 'need gradient', p.shape)
+                    
     parameters_grad, parameters_no_grad = 0, 0
-    for n,p in net_without_ddp.named_parameters():
+    for n,p in sam.named_parameters():
         if p.requires_grad: parameters_grad += 1
         else: parameters_no_grad += 1
-    print("parameters_grad Number:", parameters_grad)
-    print("parameters_no_grad Number:", parameters_no_grad)
-    
-    sam_checkpoint_map = {
-        'vit_b': os.path.join(args.load_prefix,'pretrained_checkpoint/sam_vit_b_01ec64.pth'),
-        'vit_l': 'pretrained_checkpoint/sam_vit_l_0b3195.pth',
-        'vit_h': 'pretrained_checkpoint/sam_vit_h_4b8939.pth',
-    }
-    
-    sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
+    print("First Stage SAM parameters_grad Number:", parameters_grad)
+    print("First Stage SAM parameters_no_grad Number:", parameters_no_grad)
+        
     if args.compile: sam = torch.compile(sam)
     _ = sam.to(device=args.device)
+    
     sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
     if args.restore_sam_model:
         print("restore sam model from:", args.restore_sam_model)
-        if torch.cuda.is_available():
-            sam.module.load_state_dict(torch.load(args.restore_sam_model))
+        if args.tuning_manner in ['lora']:
+            sam.module.load_lora_parameters(args.restore_sam_model)
         else:
-            sam.module.load_state_dict(torch.load(args.restore_sam_model,map_location="cpu"))
+            checkpoint = torch.load(args.restore_sam_model,map_location="cpu")
+            if args.restore_sam_model_keys: checkpoint = checkpoint[args.restore_sam_model_keys]
+            sam.module.load_state_dict(checkpoint)
+    sam_withou_ddp = sam.module
     
-    ### --- Step 3: Train or Evaluate ---    
+    ### --- Step 3: Train or Evaluate ---
     if not args.eval:
         print("--- define optimizer ---")
-        optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
+        
+        if args.tuning_manner in ['lora','adaptor']: 
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, sam_withou_ddp.parameters()), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+        elif (args.sam_type=='sam2' or args.sam_type=='sam2.1') or args.tuning_manner in ['full_weights']: optimizer = optim.Adam(sam_withou_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
+        elif args.tuning_manner in ['output_tokens','decoder']: optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
+            
         if not args.slow_start:
             lr_scheduler = StepLR(optimizer, args.lr_drop_epoch)
             lr_scheduler.last_epoch=args.start_epoch
@@ -513,6 +604,8 @@ def main(train_datasets, valid_datasets, args):
 
 
 def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
+    #evaluate(args, net, sam, valid_dataloaders)
+    
     epoch_start = args.start_epoch
     epoch_num = args.max_epoch_num
 
@@ -520,17 +613,19 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
     _ = net.to(device=args.device)
         
     for epoch in range(epoch_start,epoch_num): 
+        save_check_point(args, epoch, sam, net)
         print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
  
         metric_logger = misc.MetricLogger(delimiter="  ")
         train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
     
-        for mini_batch_data in metric_logger.log_every(train_dataloaders,10):
-            if not args.adv_prompt_training: data = mini_batch_data
-            else: data, adv_prompt_data = mini_batch_data[0], mini_batch_data[1]
+        for mini_batch_data in metric_logger.log_every(train_dataloaders,10):   
+            data, adv_prompt_data, batch_adv_prompt_training = mini_batch_data[0], mini_batch_data[1], mini_batch_data[1]['adv_prompt_training']
             
-            #import pdb; pdb.set_trace()
+            #print(batch_adv_prompt_training) #[True,False, False, False]
+            
             images, labels, ori_im_path = data['image'].cuda(), data['label'].cuda(), data['ori_im_path']  # [K 3 1024 1024]   [K N 1024 1024]
+            batch_adv_prompt_training = batch_adv_prompt_training.cuda()
             
             K, N, H, W =labels.shape
             labels = labels.reshape(K*N,H,W).cuda()  #[K*N 1024 1024]
@@ -538,24 +633,28 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
             images_np = images.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
             
             # input prompt
-            train_prompt_types = args.train_prompt_types
-            
+            train_prompt_types = copy.copy(args.train_prompt_types)
+        
             labels_box = misc.masks_to_boxes(labels) #[K*N 4]
+            if 'gt_noisy_prompt' in data and data['gt_noisy_prompt'][0] == True: 
+                labels_box = misc.box_noise(labels_box, data['boxes_noise_scale'][0].cpu().item()) #[K*N 4]
+                #print("noisy boxes training", data['boxes_noise_scale'][0].cpu().item())
+            
             try:
-                labels_points = misc.masks_sample_points(labels) #[K*N 10 2]
+                labels_points = misc.masks_sample_points(labels, k=random.choice(args.train_point_num)) #[K*N 10 2]
             except:
                 if 'points' in train_prompt_types: train_prompt_types.remove('points')
-                            
+            
             labels_256 = F.interpolate(labels.unsqueeze(1), size=(256, 256), mode='bilinear')
             labels_noisemask = misc.masks_noise(labels_256) #[K*N 1 256 256] # 暂时不使用
-
+            
             batched_input = []
             for bi in range(len(images_np)):
                 dict_input = dict()
                 input_image = torch.as_tensor(images_np[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
                 dict_input['image'] = input_image 
                 train_prompt_type = random.choice(train_prompt_types)
-                                
+                
                 sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
                 if train_prompt_type == 'boxes':
                     dict_input['boxes'] = labels_box[sparse_slice,...]  #N*4
@@ -570,65 +669,76 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
                 dict_input['original_size'] = images_np[0].shape[:2]
                 batched_input.append(dict_input)
             
-            if args.adv_prompt_training:
-                adv_boxes, adv_points, adv_prompt_images, adv_prompt_labels = adv_prompt_data['adv_boxes'].cuda().view(-1,4).contiguous(), adv_prompt_data['adv_points'].cuda().view(K*N,-1,2).contiguous(),\
-                    adv_prompt_data['image'].cuda(), adv_prompt_data['label'].cuda().reshape(K*N,H,W)
+            # batch_adv_prompt_training:
+            adv_boxes, adv_points, adv_prompt_images, adv_prompt_labels = adv_prompt_data['adv_boxes'].cuda().view(-1,4).contiguous(), adv_prompt_data['adv_points'].cuda().view(K*N,-1,2).contiguous(),\
+                adv_prompt_data['image'].cuda(), adv_prompt_data['label'].cuda().reshape(K*N,H,W)
 
-                # [K*N,4] [K*N 10 2]
-                adv_prompt_images_np = adv_prompt_images.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
+            # [K*N,4] [K*N 10 2]
+            adv_prompt_images_np = adv_prompt_images.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
+            
+            for bi in range(len(adv_prompt_images_np)):
+                dict_input = dict()
+                input_image = torch.as_tensor(adv_prompt_images_np[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
+                dict_input['image'] = input_image 
+
+                train_prompt_type = random.choice(train_prompt_types)
+                sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
                 
-                for bi in range(len(adv_prompt_images_np)):
-                    dict_input = dict()
-                    input_image = torch.as_tensor(adv_prompt_images_np[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
-                    dict_input['image'] = input_image 
-
-                    train_prompt_type = random.choice(train_prompt_types)
-                    sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
+                if train_prompt_type == 'boxes':
+                    dict_input['boxes'] = adv_boxes[sparse_slice,...]  #N*4
                     
-                    if train_prompt_type == 'boxes':
-                        dict_input['boxes'] = adv_boxes[sparse_slice,...]  #N*4
-                        
-                    elif train_prompt_type == 'points':
-                        point_coords = adv_points[sparse_slice,...] # N 10 2
-                        dict_input['point_coords'] = point_coords
-                        dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
-                    else:
-                        raise NotImplementedError
+                elif train_prompt_type == 'points':
+                    point_coords = adv_points[sparse_slice,...] # N 10 2
+                    dict_input['point_coords'] = point_coords
+                    dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
+                else:
+                    raise NotImplementedError
 
-                    dict_input['original_size'] = adv_prompt_images_np[0].shape[:2]
-                    batched_input.append(dict_input)
-                
-            with torch.no_grad():
+                dict_input['original_size'] = adv_prompt_images_np[0].shape[:2]
+                batched_input.append(dict_input)
+            
+            
+            if (args.sam_type=='sam2' or args.sam_type=='sam2.1') or args.tuning_manner in ['full_weights', 'lora', 'adaptor']:
                 batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
-            
-            batch_len = len(batched_output)
-            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+                masks = torch.cat([batched_output[i_l]['low_res_logits'].cuda() for i_l in range(len(batched_output))], dim=0)
+                #print('full_weights tuning')
+            if args.tuning_manner in ['output_tokens','decoder']:
+                with torch.no_grad():
+                    batched_output, interm_embeddings = sam(batched_input, multimask_output=False)    
+                    
+            if args.two_stage:                
+                batch_len = len(batched_output)
+                encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
+                image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
+                sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
+                dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
 
-            masks, ious = net(
-                image_embeddings=encoder_embedding,
-                image_pe=image_pe,
-                sparse_prompt_embeddings=sparse_embeddings,
-                dense_prompt_embeddings=dense_embeddings,
-                multimask_output=False
-            ) # [K*N, 1 256, 256] logits
-            
-            loss_mask, loss_dice = loss_masks(masks[:K*N,:,:,:], labels.unsqueeze(1)/255.0, K*N)
+                masks, ious = net(
+                    image_embeddings=encoder_embedding,
+                    image_pe=image_pe,
+                    sparse_prompt_embeddings=sparse_embeddings,
+                    dense_prompt_embeddings=dense_embeddings,
+                    multimask_output=False
+                ) # [K*N, 1 256, 256] logits
+                        
+            loss_mask, loss_dice =loss_masks(masks[:K*N,:,:,:], labels.unsqueeze(1)/255.0, K*N) 
+            loss_mask, loss_dice = loss_mask * args.alpha, loss_dice*args.alpha
             loss = loss_mask + loss_dice
             loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
                 
-            if args.adv_prompt_training:
-                # print(torch.max(adv_prompt_labels), torch.max(labels))
-                loss_mask_adv_prompt, loss_dice_adv_prompt = loss_masks(masks[K*N:,:,:,:], adv_prompt_labels.unsqueeze(1)/255.0, K*N)
-                loss_adv_prompt = loss_mask_adv_prompt + loss_dice_adv_prompt
-                loss_dict["loss_mask_adv_prompt"],loss_dict["loss_dice_adv_prompt"] = loss_mask_adv_prompt, loss_dice_adv_prompt
-                loss += loss_adv_prompt
-                
+            # batch_adv_prompt_training loss:
+            loss_mask_adv_prompt, loss_dice_adv_prompt =  loss_masks(masks[K*N:,:,:,:], adv_prompt_labels.unsqueeze(1)/255.0, K*N, weight=batch_adv_prompt_training.unsqueeze(1).expand(K,N).contiguous().view(K*N))
+            loss_mask_adv_prompt, loss_dice_adv_prompt = loss_mask_adv_prompt*args.beta, loss_dice_adv_prompt*args.beta
+            loss_adv_prompt = loss_mask_adv_prompt + loss_dice_adv_prompt
+            loss_dict["loss_mask_adv_prompt"],loss_dict["loss_dice_adv_prompt"] = loss_mask_adv_prompt, loss_dice_adv_prompt
+            loss += loss_adv_prompt
+            
+            #import pdb; pdb.set_trace()
+            #print(loss.shape)
             #print(loss_dict, torch.sum(adv_boxes), torch.sum(labels_box))
             
             # reduce losses over all GPUs for logging purposes
+            # print(loss)
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             losses_reduced_scaled = sum(loss_dict_reduced.values())
             loss_value = losses_reduced_scaled.item()
@@ -640,39 +750,70 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
             metric_logger.update(training_loss=loss_value, **loss_dict_reduced)
 
             
-            '''
             ## Debug for adv prompt training
-            if train_prompt_type =='boxes':
-                save_dir = os.path.join(args.output, train_prompt_type, random.choice(train_datasets)['name'])
-            if train_prompt_type =='points':
-                save_dir = os.path.join(args.output, train_prompt_type+'_'+str(args.point_num), random.choice(train_datasets)['name'])
+            # if train_prompt_type =='boxes':
+            #     save_dir = os.path.join(args.output, train_prompt_type, random.choice(train_datasets)['name'])
+            # if train_prompt_type =='points':
+            #     save_dir = os.path.join(args.output, train_prompt_type+'_'+str(args.point_num), random.choice(train_datasets)['name'])
             
-            Path(save_dir).mkdir(parents=True,exist_ok=True)
+            # Path(save_dir).mkdir(parents=True,exist_ok=True)
             
-            for batch_i in range(images.shape[0]):
+            # for batch_i in range(images.shape[0]):
                 
-                base = ori_im_path[batch_i].split('/')[-1]
-                index = base[::-1].index('.')
-                base = base[:-index-1]
-                save_base = os.path.join(save_dir, str(base))
-                #print(save_base)
+            #     base = ori_im_path[batch_i].split('/')[-1]
+            #     index = base[::-1].index('.')
+            #     base = base[:-index-1]
+            #     save_base = os.path.join(save_dir, str(base))
+            #     #print(save_base)
                 
-                masks_vis = (F.interpolate(masks[K*N+batch_i*N:K*N+batch_i*N+N,:,:,:].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu() # [N,1,1024,1024]
-                adv_prompt_image_np = adv_prompt_images_np[batch_i].astype(dtype=np.uint8)  #[1024 1024 3]
-                cv2.imwrite(save_base+'_im.jpg',adv_prompt_image_np[:,:,::-1])
+            #     masks_vis = (F.interpolate(masks[K*N+batch_i*N:K*N+batch_i*N+N,:,:,:].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu() # [N,1,1024,1024]
+            #     adv_prompt_image_np = adv_prompt_images_np[batch_i].astype(dtype=np.uint8)  #[1024 1024 3]
+            #     cv2.imwrite(save_base+'_im.jpg',adv_prompt_image_np[:,:,::-1])
                 
-                #print(masks_vis.shape)
-                iou, boundary_iou = [0]*N, [0]*N 
+            #     #print(masks_vis.shape)
+            #     iou, boundary_iou = [0]*N, [0]*N 
                 
-                batch_slice = slice(batch_i*N,(batch_i+1)*N) 
+            #     batch_slice = slice(batch_i*N,(batch_i+1)*N) 
                 
-                if train_prompt_type =='boxes':
-                    show_anns(adv_prompt_labels[batch_slice].cpu(), masks_vis, None, None, adv_boxes[batch_slice].cpu(), save_base , adv_prompt_image_np, iou, boundary_iou)
-                elif train_prompt_type =='points':
-                    show_anns(adv_prompt_labels[batch_slice].cpu(), masks_vis, adv_points[batch_slice].cpu(), torch.ones(adv_points[batch_slice].shape[:2]).cpu(), None, save_base, adv_prompt_image_np, iou, boundary_iou)
-                else:
-                    raise NotImplementedError
-                '''
+            #     if train_prompt_type =='boxes':
+            #         show_anns(adv_prompt_labels[batch_slice].cpu(), masks_vis, None, None, adv_boxes[batch_slice].cpu(), save_base , adv_prompt_image_np, iou, boundary_iou)
+            #     elif train_prompt_type =='points':
+            #         show_anns(adv_prompt_labels[batch_slice].cpu(), masks_vis, adv_points[batch_slice].cpu(), torch.ones(adv_points[batch_slice].shape[:2]).cpu(), None, save_base, adv_prompt_image_np, iou, boundary_iou)
+            #     else:
+            #         raise NotImplementedError
+
+            ## Debug for normal training
+            # if train_prompt_type =='boxes':
+            #     save_dir = os.path.join(args.output, train_prompt_type, random.choice(train_datasets)['name'])
+            # if train_prompt_type =='points':
+            #     save_dir = os.path.join(args.output, train_prompt_type+'_'+str(args.point_num), random.choice(train_datasets)['name'])
+            
+            # Path(save_dir).mkdir(parents=True,exist_ok=True)
+            
+            # for batch_i in range(images.shape[0]):
+                
+            #     base = ori_im_path[batch_i].split('/')[-1]
+            #     index = base[::-1].index('.')
+            #     base = base[:-index-1]
+            #     save_base = os.path.join(save_dir, str(base)+'_normal')
+            #     #print(save_base)
+                
+            #     masks_vis = (F.interpolate(masks[batch_i*N:batch_i*N+N,:,:,:].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu() # [N,1,1024,1024]
+            #     image_np = images_np[batch_i].astype(dtype=np.uint8)  #[1024 1024 3]
+            #     cv2.imwrite(save_base+'_im.jpg',image_np[:,:,::-1])
+                
+            #     #print(masks_vis.shape)
+            #     iou, boundary_iou = [0]*N, [0]*N 
+                
+            #     batch_slice = slice(batch_i*N,(batch_i+1)*N) 
+                
+            #     if train_prompt_type =='boxes':
+            #         show_anns(labels[batch_slice].cpu(), masks_vis, None, None, labels_box[batch_slice].cpu(), save_base , image_np, iou, boundary_iou)
+            #     elif train_prompt_type =='points':
+            #         show_anns(labels[batch_slice].cpu(), masks_vis, labels_points[batch_slice].cpu(), torch.ones(labels_points[batch_slice].shape[:2]).cpu(), None, save_base, image_np, iou, boundary_iou)
+            #     else:
+            #         raise NotImplementedError
+            
     
         print("Finished epoch:      ", epoch)
         metric_logger.synchronize_between_processes()
@@ -691,20 +832,18 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
         
         net.train()  
 
-        if epoch % args.model_save_fre == 0:
-            model_name = "/epoch_"+str(epoch)+".pth"
-            print('come here save at', args.output + model_name)
-            misc.save_on_master(net.module.state_dict(), args.output + model_name)
-    
+        if epoch % args.model_save_fre == 0: save_check_point(args, epoch, sam, net)
+
+            
     # Finish training
     print("Training Reaches The Maximum Epoch Number")
     
     # merge sam and tune_decoder
-    if misc.is_main_process():        
+    if args.sam_type!='sam2' and args.tuning_manner in ['output_tokens','decoder'] and  misc.is_main_process():        
         sam_checkpoint_map = {
-            'vit_b': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
-            'vit_l': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
-            'vit_h': 'pretrained_checkpoint/sam_vit_b_01ec64.pth',
+            'vit_b': '../pretrained/sam_vit_b_01ec64.pth',
+            'vit_l': '../pretrained/sam_vit_b_01ec64.pth',
+            'vit_h': '../pretrained/sam_vit_b_01ec64.pth',
         }
         sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
 
@@ -716,6 +855,17 @@ def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_sch
         model_name = "/asam_epoch_"+str(epoch)+".pth"
         torch.save(sam_ckpt, args.output + model_name)
 
+
+def save_check_point(args, epoch, sam, net):
+    model_name = "/epoch_"+str(epoch)+".pth"
+    print('come here save at', args.output + model_name)
+    if (args.sam_type=='sam2' or args.sam_type=='sam2.1')or args.tuning_manner in ['full_weights', 'adaptor']:
+        misc.save_on_master(sam.module.state_dict(), args.output + model_name)
+    elif args.tuning_manner in ['lora'] and misc.is_main_process():
+        sam.module.save_lora_parameters(args.output + model_name)            
+    elif args.tuning_manner in ['output_tokens','decoder']:
+        misc.save_on_master(net.module.state_dict(), args.output + model_name)
+    
 @torch.no_grad()
 def compute_iou(preds, target):
     assert target.shape[1] == 1, 'only support one mask per image now'
@@ -754,185 +904,218 @@ def bad_examples_info(bad_examples, metric_logger, k):
     
     loss_dict_reduced = misc.reduce_dict(loss_dict)
     metric_logger.update(**loss_dict_reduced)
+
+@torch.no_grad()
+def evaluate_one_sample(args, net, sam, bad_examples, dataset_id, metric_logger,  iou_head_prediction_sum, all_mask_nums, max_len, data_val):
+    imidx_val, images_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'].cuda(), data_val['label'].cuda(), data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
     
+    # print(labels_val.shape)
+    # max_len[0] = max(max_len[0], labels_val.shape[1])
+    
+    # labels_val = labels_val[0:1,0:1,:,:].expand(-1, max_len[0], -1, -1)
+    # labels_ori = labels_ori[0:1,0:1,:,:].expand(-1, max_len[0], -1, -1)
+    
+    K,N,H,W = labels_val.shape
+    K,N,h,w = labels_ori.shape
+    
+    if N == 0: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
+        
+    labels_val = labels_val.reshape(K*N,H,W).cuda() #K*N 1024 1024 
+    labels_ori = labels_ori.reshape(K*N,h,w).cuda()
+                
+    images_val_np = images_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
+    
+    if args.eval_prompt_type=='boxes':
+        labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
+    if args.eval_prompt_type=='points':  
+        try: labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
+        except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
+    
+    batched_input = []
+    dict_input = dict()
+    
+    input_image = torch.as_tensor(images_val_np[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
+    dict_input['image'] = input_image
+    if args.eval_prompt_type == 'boxes':
+        dict_input['boxes'] = labels_box #N 4
+    elif args.eval_prompt_type == 'points':
+        point_coords = labels_points #[N 10 2]
+        dict_input['point_coords'] = point_coords
+        dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
+    else:
+        raise NotImplementedError
+    
+    if args.eval_stability and args.eval_prompt_type == 'boxes':
+        dict_input['boxes'] = torch.cat([dict_input['boxes'],torch.cat([misc.box_noise(dict_input['boxes'], args.boxes_noise_scale) for i in range(args.stable_iter)],dim=0)])
+    
+    ## To do
+    if args.eval_stability and args.eval_prompt_type == 'points':
+        for i in range(args.stable_iter):
+            dict_input['point_coords'] = torch.cat([dict_input['point_coords'],misc.masks_sample_points(labels_val,k=args.point_num)])
+        dict_input['point_labels'] = torch.ones(dict_input['point_coords'].size()[:2], device=point_coords.device)
+        #import pdb; pdb.set_trace()
+        
+    dict_input['original_size'] = images_val_np[0].shape[:2]
+    batched_input.append(dict_input)
+
+    
+    if args.serial_prompt:
+        new_batched_input = []
+        for i in range((labels_ori.shape[0] * (args.stable_iter if args.eval_stability else 0) + labels_ori.shape[0] + args.serial_prompt_size -1 )// args.serial_prompt_size):
+            start, end = i*args.serial_prompt_size, min(i*args.serial_prompt_size+args.serial_prompt_size, labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0])
+            if end - start < 1: return
+            
+            serial_slice = slice(start, end)
+            new_dict = {}
+            new_dict['image'] = batched_input[0]['image']
+            if args.eval_prompt_type == 'boxes': new_dict['boxes'] = batched_input[0]['boxes'][serial_slice]
+            if args.eval_prompt_type == 'points': 
+                new_dict['point_coords'] = batched_input[0]['point_coords'][serial_slice]
+                new_dict['point_labels'] = batched_input[0]['point_labels'][serial_slice]
+            new_dict['original_size'] = images_val_np[0].shape[:2]
+            
+            new_batched_input.append(new_dict)
+            
+        
+        batched_input = new_batched_input
+    
+    with torch.autocast(device_type="cuda"):
+        batched_output, interm_embeddings = sam(batched_input, multimask_output=args.eval_multimask_output, multiplexing_mode=True)
+        
+    batch_len = len(batched_output)
+    masks = torch.cat([batched_output[i_l]['low_res_logits'].cuda() for i_l in range(batch_len)], dim=0)
+    ious = torch.cat([batched_output[i_l]['iou_predictions'] for i_l in range(batch_len)], dim=0)
+
+    #import pdb; pdb.set_trace()
+    if args.baseline or args.two_stage == False:
+        masks = masks.to(torch.float32) if not args.eval_multimask_output else masks[:,args.mask_id:args.mask_id+1,:,:].to(torch.float32)
+        ious = ious.to(torch.float32) if not args.eval_multimask_output else ious[:,args.mask_id:args.mask_id+1].to(torch.float32)
+        iou_head_prediction_sum[0] += torch.sum(ious).item()
+        all_mask_nums[0] += torch.numel(ious)
+        #print('single stage testing')
+    else:
+        # print(args.eval_multimask_output)
+        encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
+        image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
+        sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
+        dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+        masks, ious = net(
+            image_embeddings=encoder_embedding,
+            image_pe=image_pe,
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            multimask_output=args.eval_multimask_output,
+        ) #[N,:,1024,1024]
+        
+        #import pdb; pdb.set_trace()
+        if args.eval_multimask_output: 
+            ious = ious[:,args.mask_id:args.mask_id+1]
+            masks = masks[:,args.mask_id:args.mask_id+1,:,:]
+        
+        masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
+        iou_head_prediction_sum[0] += torch.sum(ious).item()
+        all_mask_nums[0] += torch.numel(ious)
+        
+    # print(masks.shape, ious.shape)
+    # raise NameError
+    
+    # iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
+    # boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
+    
+    try:
+        iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
+        boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
+        if args.eval_stability: stability, stability_list, stability_iou_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
+    except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
+    
+    #print(iou)
+    
+    if torch.isnan(iou).any() or torch.isnan(boundary_iou).any(): bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
+
+    if args.eval_prompt_type =='boxes':
+        save_dir = os.path.join(args.output, args.eval_prompt_type, valid_datasets[dataset_id]['name'])
+    if args.eval_prompt_type =='points':
+        save_dir = os.path.join(args.output, args.eval_prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
+    
+    Path(save_dir).mkdir(parents=True,exist_ok=True)
+    
+    base = ori_im_path[0].split('/')[-1]
+    index = base[::-1].index('.')
+    base = base[:-index-1]
+    save_base = os.path.join(save_dir, str(base))
+    Path(save_base).mkdir(parents=True,exist_ok=True)
+    
+    if args.eval_record: record_iou(save_base, iou_list, boundary_iou_list)
+    if args.eval_stability and args.eval_record: record_stability(save_base, stability_list, stability_iou_list)
+    
+    #print(os.path.join(args.output, 'GT', valid_datasets[dataset_id]['name'],str(base))+'.png')
+    
+    # save GT
+    #Path(os.path.join(args.output, 'GT', valid_datasets[dataset_id]['name'])).mkdir(parents=True,exist_ok=True)
+    #cv2.imwrite(os.path.join(args.output, 'GT', valid_datasets[dataset_id]['name'],str(base))+'.png', labels_ori[0,...].detach().cpu().numpy())
+
+    if args.visualize:
+        # standard visualize
+        masks_vis = (F.interpolate(masks[:labels_val.shape[0]].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+        image_val_np = images_val_np[0].astype(dtype=np.uint8) #[1024,1024,3]
+        cv2.imwrite(save_base+'_im.jpg',image_val_np[:,:,::-1])
+        if args.eval_prompt_type=='boxes':
+            show_anns(labels_val.cpu(), masks_vis, None, None, labels_box.cpu(), save_base , image_val_np, iou_list, boundary_iou_list, boxes_color='gold')
+        elif args.eval_prompt_type=='points':
+            show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), torch.ones(labels_points.shape[:2]).cpu(), None, save_base , image_val_np, iou_list, boundary_iou_list)
+
+        # adv prompt visualize
+        for i in range(args.stable_iter):
+            length = labels_val.shape[0]
+            masks_vis = (F.interpolate(masks[length*(i+1): length*(i+2)].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+            image_val_np = images_val_np[0].astype(dtype=np.uint8) #[1024,1024,3]
+            
+            if args.eval_prompt_type=='boxes':
+                show_anns(labels_val.cpu(), masks_vis, None, None,  dict_input['boxes'][length*(i+1): length*(i+2)].cpu(), save_base, image_val_np, iou_list, boundary_iou_list, save_gt=False, suffix=str(i), boxes_color='red')
+            elif args.eval_prompt_type=='points':
+                show_anns(labels_val.cpu(), masks_vis, dict_input['point_coords'][length*(i+1): length*(i+2)].cpu(), torch.ones(dict_input['point_coords'][length*(i+1): length*(i+2)].shape[:2]).cpu(), None, save_base, image_val_np, iou_list, boundary_iou_list, save_gt=False, suffix=str(i))
+            
+    ## bug to fix
+    if args.visualize2:
+        masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
+        imgs_ii = imgs[0].astype(dtype=np.uint8)
+        
+        if args.prompt_type=='box':
+            show_anns2(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
+        elif args.prompt_type=='point':
+            show_anns2(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
+    
+    loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou.cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou.cuda()}
+    if args.eval_stability: loss_dict['val_stability_'+str(valid_datasets[dataset_id]['name'])] = stability.cuda()
+    
+    loss_dict_reduced = misc.reduce_dict(loss_dict)
+    metric_logger.update(**loss_dict_reduced)
+    
+    # 等待所有进程到达这里
+    dist.barrier()
+            
 @torch.no_grad()
 def evaluate(args, net, sam, valid_dataloaders):
     net.eval()
     print("Validating...")
     test_stats = {}
      
-    max_len = 0 
+    max_len = [0] 
     for dataset_id, k in enumerate(range(len(valid_dataloaders))):
         bad_examples = [0]
         metric_logger = misc.MetricLogger(delimiter="  ")
         valid_dataloader = valid_dataloaders[k]
-        iou_head_prediction_sum, all_mask_nums = 0, 0
+        iou_head_prediction_sum, all_mask_nums = [0], [0]
         print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
         
-        #max_len = 283
         
         for data_val in metric_logger.log_every(valid_dataloader,10):
+            evaluate_one_sample(args, net, sam, bad_examples, dataset_id, metric_logger,  iou_head_prediction_sum, all_mask_nums, max_len, data_val)
+            try: evaluate_one_sample(args, net, sam, bad_examples, dataset_id, metric_logger,  iou_head_prediction_sum, all_mask_nums, max_len, data_val)
+            except: bad_examples_info(bad_examples,metric_logger,k), print_current_line(sys._getframe()); 
             
-            imidx_val, images_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'].cuda(), data_val['label'].cuda(), data_val['shape'], data_val['ori_label'],data_val['ori_im_path']
-            
-            # labels_val = labels_val[0:1,0:1,:,:].expand(-1, max_len, -1, -1)
-            # labels_ori = labels_ori[0:1,0:1,:,:].expand(-1, max_len, -1, -1)
-            
-            K,N,H,W = labels_val.shape
-            K,N,h,w = labels_ori.shape
-            
-            if N == 0: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
-                
-            labels_val = labels_val.reshape(K*N,H,W).cuda() #K*N 1024 1024 
-            labels_ori = labels_ori.reshape(K*N,h,w).cuda()
-                        
-            images_val_np = images_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
-            
-            if args.eval_prompt_type=='boxes':
-                labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
-            if args.eval_prompt_type=='points':  
-                try: labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
-                except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
-            
-            batched_input = []
-            dict_input = dict()
-            
-            input_image = torch.as_tensor(images_val_np[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
-            dict_input['image'] = input_image
-            if args.eval_prompt_type == 'boxes':
-                dict_input['boxes'] = labels_box #N 4
-            elif args.eval_prompt_type == 'points':
-                point_coords = labels_points #[N 10 2]
-                dict_input['point_coords'] = point_coords
-                dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
-            else:
-                raise NotImplementedError
-            
-            if args.eval_stability and args.eval_prompt_type == 'boxes':
-                dict_input['boxes'] = torch.cat([dict_input['boxes'],torch.cat([misc.box_noise(dict_input['boxes'], args.boxes_noise_scale) for i in range(args.stable_iter)],dim=0)])
-            
-            ## To do
-            if args.eval_stability and args.eval_prompt_type == 'points':
-                for i in range(args.stable_iter):
-                    dict_input['point_coords'] = torch.cat([dict_input['point_coords'],misc.masks_sample_points(labels_val,k=args.point_num)])
-                dict_input['point_labels'] = torch.ones(dict_input['point_coords'].size()[:2], device=point_coords.device)
-                #import pdb; pdb.set_trace()
-                
-            dict_input['original_size'] = images_val_np[0].shape[:2]
-            batched_input.append(dict_input)
-            
-            if args.serial_prompt:
-                new_batched_input = []
-                for i in range((labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0] + args.serial_prompt_size)// args.serial_prompt_size):
-                    serial_slice = slice(i*args.serial_prompt_size, min(i*args.serial_prompt_size+args.serial_prompt_size, labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0]))
-                    new_dict = {}
-                    new_dict['image'] = batched_input[0]['image']
-                    if args.eval_prompt_type == 'boxes': new_dict['boxes'] = batched_input[0]['boxes'][serial_slice]
-                    if args.eval_prompt_type == 'points': 
-                        new_dict['point_coords'] = batched_input[0]['point_coords'][serial_slice]
-                        new_dict['point_labels'] = batched_input[0]['point_labels'][serial_slice]
-                    new_dict['original_size'] = images_val_np[0].shape[:2]
-                    new_batched_input.append(new_dict)
-                
-                batched_input = new_batched_input
-                
-            batched_output, interm_embeddings = sam(batched_input, multimask_output=args.eval_multimask_output)
-                
-            batch_len = len(batched_output)
-            encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-            image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-            sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-            dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
-            masks = torch.cat([batched_output[i_l]['low_res_logits'] for i_l in range(batch_len)], dim=0)
-            ious = torch.cat([batched_output[i_l]['iou_predictions'] for i_l in range(batch_len)], dim=0)
-
-            if args.baseline:
-                #print(torch.sum(masks), ori_im_path)
-                masks = masks.to(torch.float32) if not args.eval_multimask_output else masks[:,args.mask_id:args.mask_id+1,:,:].to(torch.float32)
-                ious = ious.to(torch.float32) if not args.eval_multimask_output else ious[:,args.mask_id:args.mask_id+1].to(torch.float32)
-                iou_head_prediction_sum += torch.sum(ious).item()
-                all_mask_nums += torch.numel(ious)
-            else:
-                with torch.cuda.amp.autocast():
-                    masks, ious = net(
-                        image_embeddings=encoder_embedding,
-                        image_pe=image_pe,
-                        sparse_prompt_embeddings=sparse_embeddings,
-                        dense_prompt_embeddings=dense_embeddings,
-                        multimask_output=args.eval_multimask_output,
-                    ) #[N,:,1024,1024]
-                
-                #import pdb; pdb.set_trace()
-                if args.eval_multimask_output: 
-                    ious = ious[:,args.mask_id:args.mask_id+1]
-                    masks = masks[:,args.mask_id:args.mask_id+1,:,:]
-                
-                masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-                iou_head_prediction_sum += torch.sum(ious).item()
-                all_mask_nums += torch.numel(ious)
-                
-            # print(masks.shape, ious.shape)
-            # raise NameError
-            
-            # iou,iou_list = compute_iou(masks,labels_ori.unsqueeze(1))
-            # boundary_iou,boundary_iou_list = compute_boundary_iou(masks,labels_ori.unsqueeze(1))
-            
-            #print(labels_ori.shape)
-            iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
-            boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
-            if args.eval_stability: stability,stability_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
-            try:
-                iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
-                boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
-                if args.eval_stability: stability,stability_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
-            except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
-            
-            if torch.isnan(iou).any() or torch.isnan(boundary_iou).any(): bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); continue
-
-            if args.eval_prompt_type =='boxes':
-                save_dir = os.path.join(args.output, args.eval_prompt_type, valid_datasets[dataset_id]['name'])
-            if args.eval_prompt_type =='points':
-                save_dir = os.path.join(args.output, args.eval_prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
-            
-            Path(save_dir).mkdir(parents=True,exist_ok=True)
-            
-            base = ori_im_path[0].split('/')[-1]
-            index = base[::-1].index('.')
-            base = base[:-index-1]
-            save_base = os.path.join(save_dir, str(base))
-            Path(save_base).mkdir(parents=True,exist_ok=True)
-            
-
-            if args.eval_record: record_iou(save_base, iou_list, boundary_iou_list)
-            if args.eval_stability and args.eval_record: record_stability(save_base, stability_list)
-            
-            if args.visualize:
-                masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-                image_val_np = images_val_np[0].astype(dtype=np.uint8) #[1024,1024,3]
-                cv2.imwrite(save_base+'_im.jpg',image_val_np[:,:,::-1])
-                if args.eval_prompt_type=='boxes':
-                    show_anns(labels_val.cpu(), masks_vis, None, None, labels_box.cpu(), save_base , image_val_np, iou_list, boundary_iou_list)
-                elif args.eval_prompt_type=='points':
-                    show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), torch.ones(labels_points.shape[:2]).cpu(), None, save_base , image_val_np, iou_list, boundary_iou_list)
-
-            
-            ## bug to fix 
-            if args.visualize2:
-                masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-                imgs_ii = imgs[0].astype(dtype=np.uint8)
-                
-                if args.prompt_type=='box':
-                    show_anns2(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
-                elif args.prompt_type=='point':
-                    show_anns2(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
-            
-            loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou, "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou}
-            if args.eval_stability: loss_dict['val_stability_'+str(valid_datasets[dataset_id]['name'])] = stability
-            
-            loss_dict_reduced = misc.reduce_dict(loss_dict)
-            metric_logger.update(**loss_dict_reduced)
-            # 等待所有进程到达这里
-            dist.barrier()
+        print(max_len[0])
+        #import pdb; pdb.set_trace()
         print('============================')
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
@@ -942,9 +1125,9 @@ def evaluate(args, net, sam, valid_dataloaders):
         print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
         
         if args.eval_multimask_output:                
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
         else:
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
                     
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
@@ -952,9 +1135,10 @@ def evaluate(args, net, sam, valid_dataloaders):
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
                 if args.eval_multimask_output:                
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
                 else:
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n')
+                    
         print('============================')
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
@@ -964,9 +1148,9 @@ def evaluate(args, net, sam, valid_dataloaders):
         print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
         
         if args.eval_multimask_output:                
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
         else:
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
                     
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
@@ -974,9 +1158,9 @@ def evaluate(args, net, sam, valid_dataloaders):
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
                 if args.eval_multimask_output:                
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
                 else:
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
         print('============================')
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
@@ -986,9 +1170,9 @@ def evaluate(args, net, sam, valid_dataloaders):
         print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
         
         if args.eval_multimask_output:                
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
         else:
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
                     
         text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
         if misc.is_main_process():
@@ -996,9 +1180,9 @@ def evaluate(args, net, sam, valid_dataloaders):
                 f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
                 f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
                 if args.eval_multimask_output:                
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
                 else:
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum/all_mask_nums) +'\n') 
+                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
 
 
     return test_stats
@@ -1023,7 +1207,7 @@ if __name__ == "__main__":
         "gt_ext": ""
     }
     
-    dataset_sa000000 = {"name": "sam_subset",
+    dataset_sa000000 = {"name": "sam_subset_ori",
         "im_dir": "../sam-1b/sa_000000",
         "gt_dir": "../sam-1b/sa_000000",
         "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-0-AttackObject-boxes-Definder-sam-vit_b-4-box-10-Loss-100.0-100.0-0.5-2-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1/adv',
@@ -1045,17 +1229,6 @@ if __name__ == "__main__":
         "adv_points_ext": '_points.txt',
     }
 
-    dataset_sa000000_SSD_adv_imgs_prompt = {"name": "sam_subset",
-        "im_dir": "../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
-        "gt_dir": "../sam-1b/sa_000000",
-        "adv_boxes_dir": '../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
-        "adv_points_dir": '../output/sa_000000-Grad-SSD-ESAM/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-efficient_sam-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
-        "im_ext": ".jpg",
-        "gt_ext": "",
-        "adv_boxes_ext": '_boxes.txt',
-        "adv_points_ext": '_points.txt',
-    }
-    
     dataset_sa000138_dci = {"name": "sam1b_sa000138_dci",
         "im_dir": "../output/sa_000138-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.4-10-0.04-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000138",
@@ -1083,65 +1256,9 @@ if __name__ == "__main__":
         "im_ext": ".jpg",
         "gt_ext": ""
     }
-    dataset_sa000138_controlnet_plus_no_reward_2 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_no_reward_checkpoint-2_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    dataset_sa000138_controlnet_plus_no_reward_20 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_no_reward_checkpoint-20_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    
 
     dataset_sa000138_controlnet_plus_10 = {"name": "sam1b_sa000138_controlnet_plus",
         "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-10_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    
-    dataset_sa000138_controlnet_plus_180 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-180_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    
-    dataset_sa000138_controlnet_plus_200 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-200_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    
-    dataset_sa000138_controlnet_plus_220 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/work_dirs_reward_model_SAM-1B_reward_ft_controlnet_sd15_interactive_seg_res512_bs256_lr1e-5_warmup100_scale-0.5_iter5k_fp16_train0-1k_reward0-200_EfficientSAM_restart_checkpoint-220_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-
-
-    dataset_sa000138_controlnet_SSD_30000 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/.._ControlNetSDXL_train_output_sdxl_checkpoint-30000_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-
-    dataset_sa000138_controlnet_SSD_40500 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/.._ControlNetSDXL_train_output_sdxl2_checkpoint-40500_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    
-    dataset_sa000138_controlnet_SSD_52000 = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/.._ControlNetSDXL_train_output_sdxl3_checkpoint-2000_controlnet_7.5-20/images/group_1",
         "gt_dir": "../sam-1b/sa_000138",
         "im_ext": ".jpg",
         "gt_ext": ""
@@ -1167,15 +1284,6 @@ if __name__ == "__main__":
         "im_ext": ".jpg",
         "gt_ext": ""
     }
-
-    dataset_sa000138_controlnet_sdxl = {"name": "sam1b_sa000138_controlnet_plus",
-        "im_dir": "../ControlNet_Plus_Plus/work_dirs/eval_dirs/sa000000/validation/_data_tanglv_xhk_ASAM_2023-12-19_ASAM-Main_ControlNet-main_train_output_sdxl_checkpoint-15000_controlnet_7.5-20/images/group_1",
-        "gt_dir": "../sam-1b/sa_000138",
-        "im_ext": ".jpg",
-        "gt_ext": ""
-    }
-    
-    
     
     dataset_sa000000efficient = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam_efficient-vit_t-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
@@ -1190,7 +1298,130 @@ if __name__ == "__main__":
         "im_ext": ".png",
         "gt_ext": ""
     }
+
+    dataset_sa000000_direct_inversion_adv_img_adv_prompt = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': False,
+        'adv_prompt': True,
+    }
     
+    dataset_sa000000_direct_inversion_adv_augmentation_img_adv_prompt = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': True,
+        'adv_prompt': True,
+    }
+
+    dataset_sa000000_direct_inversion_adv_augmentation_img_adv_prompt_sam2 = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad-SAM2/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam2-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad-SAM2/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam2-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': True,
+        'adv_prompt': True,
+    }
+
+
+    dataset_sa000000_direct_inversion_adv_augmentation_img_gt_prompt_sam2 = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad-SAM2/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam2-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad-SAM2/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam2-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': True,
+        'adv_prompt': False,
+    }
+    
+    dataset_sa000000_direct_inversion_adv_augmentation_img_adv_prompt_controlnet_plus_plus = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad-ControlNet++/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad-ControlNet++/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad-ControlNet++/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': True,
+        'adv_prompt': True,
+    }
+    
+    dataset_sa000000_direct_inversion_adv_augmentation_img_gt_prompt = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': True,
+        'adv_prompt': False,
+    }
+
+
+    dataset_sa000000_direct_inversion_adv_augmentation_img_gt_noisy_prompt = {"name": "sam_subset",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'augmentation': True,
+        'adv_prompt': False,
+        'gt_noisy_prompt': True,
+        'boxes_noise_scale': 0.2,
+    }
+    
+    
+    dataset_sa000000_ori_img_adv_prompt = {"name": "sam_subset",
+        "im_dir": "../sam-1b/sa_000000",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'aumentation': False,
+        'adv_prompt': True,
+    }
+
+    dataset_sa000000_ori_augmentation_img_gt_prompt = {"name": "sam_subset",
+        "im_dir": "../sam-1b/sa_000000",
+        "gt_dir": "../sam-1b/sa_000000",
+        "adv_boxes_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
+        "adv_points_dir": '../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
+        "im_ext": ".jpg",
+        "gt_ext": "",
+        "adv_boxes_ext": '_boxes.txt',
+        "adv_points_ext": '_points.txt',
+        'aumentation': True,
+        'adv_prompt': False,
+    }
+    
+
     dataset_sa000000adv_dice = {"name": "sam_subset",
         "im_dir": "../output/sa_000000-Grad/skip-ablation-01-mi-SD-7.5-50-SAM-sam-vit_b-140-ADV-0.2-10-0.01-0.5-100.0-100.0-1.0-2/adv",
         "gt_dir": "../sam-1b/sa_000000",
@@ -1423,8 +1654,8 @@ if __name__ == "__main__":
     }
     
     dataset_ZeroWaste = {"name": "ZeroWaste",
-        "im_dir": "data/ZeroWaste/train/data",
-        "gt_dir": "data/ZeroWaste/train/sem_seg",
+        "im_dir": "data/ZeroWaste/val/data",
+        "gt_dir": "data/ZeroWaste/val/sem_seg",
         "im_ext": ".PNG",
         "gt_ext": ".PNG"
     }
@@ -1495,18 +1726,19 @@ if __name__ == "__main__":
     
     args = get_args_parser()
     
-    if not args.eval:
+    if args.only_output_prefix: args.output = args.output_prefix
+    elif not args.eval:
         args.output = os.path.join('work_dirs', args.output_prefix+'-')
         for train_dataset in args.train_datasets:
             args.output += train_dataset.replace('dataset_','')
             args.output += '-'
         args.output += args.model_type + '-' + str(args.train_img_num) 
-    
     elif args.baseline: 
-        if not args.restore_sam_model: args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
-        else: args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
+        args.output = os.path.join('work_dirs', args.output_prefix+'-'+args.model_type)
     elif args.restore_model:
         args.output = os.path.join(*args.restore_model.split('/')[:-1])
+    elif args.restore_sam_model:
+        args.output = os.path.join(*args.restore_sam_model.split('/')[:-1])
     
     train_datasets = [globals()[dataset] for dataset in args.train_datasets]
     valid_datasets = [globals()[dataset] for dataset in args.valid_datasets]
