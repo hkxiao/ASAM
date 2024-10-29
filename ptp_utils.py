@@ -35,7 +35,7 @@ def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, i
 
 
 def view_images(images, num_rows=1, offset_ratio=0.02, prefix='test', shuffix='.png'):
-    print(len(images))
+    # print(len(images))
     images = [image for image in images if type(image) == np.ndarray]
     
     if type(images) is list:
@@ -135,44 +135,65 @@ def view_images_with_title(images, titles, num_rows=1, offset_ratio=0.02, prefix
 # titles = [f"image_{i}" for i in range(10)]
 # view_images(images, titles, num_rows=2, offset_ratio=0.05, prefix='output', suffix='.png')
 
-def get_noise_pred(model, latents, masks, t, context, guess_mode=None):
+def get_noise_pred(model, latents, masks, feats, t, context, guess_mode=None, mask_control_scale=1.0, feat_control_scale=1.0):
     if masks != None:
-        down_block_res_samples, mid_block_res_sample = model.controlnet(
+        down_block_res_samples_mask, mid_block_res_sample_mask = model.mask_controlnet(
                     latents,
                     t,
                     encoder_hidden_states=context,
                     controlnet_cond=masks,
                     return_dict=False,
                 )
-    else:
-        down_block_res_samples, mid_block_res_sample = None, None
+    else: down_block_res_samples_mask, mid_block_res_sample_mask = None, None
+    if down_block_res_samples_mask!=None and guess_mode and mid_block_res_sample_mask.shape[0]==2:
+        down_block_res_samples_mask = [d[1:] for d in down_block_res_samples_mask]
+        mid_block_res_sample_mask =  mid_block_res_sample_mask[1:]
+        down_block_res_samples_mask = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples_mask]
+        mid_block_res_sample_mask = torch.cat([torch.zeros_like(mid_block_res_sample_mask), mid_block_res_sample_mask])
+        
+    if feats != None:
+        down_block_res_samples_feat, mid_block_res_sample_feat = model.feat_controlnet(
+                    latents,
+                    t,
+                    encoder_hidden_states=context,
+                    controlnet_cond=feats,
+                    return_dict=False,
+                )
+    else: down_block_res_samples_feat, mid_block_res_sample_feat = None, None
+    if down_block_res_samples_feat!=None and guess_mode and mid_block_res_sample_feat.shape[0]==2:
+        down_block_res_samples_feat = [d[1:] for d in down_block_res_samples_feat]
+        mid_block_res_sample_feat =  mid_block_res_sample_feat[1:]
+        down_block_res_samples_feat = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples_feat]
+        mid_block_res_sample_feat = torch.cat([torch.zeros_like(mid_block_res_sample_feat), mid_block_res_sample_feat])                 
     
-    if down_block_res_samples!=None and guess_mode and mid_block_res_sample.shape[0]==2:
-        down_block_res_samples = [d[1:] for d in down_block_res_samples]
-        mid_block_res_sample =  mid_block_res_sample[1:]
-        down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-        mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
-            
+    down_block_res_samples = [down_block_res_sample_mask * mask_control_scale + \
+                            down_block_res_sample_feat * feat_control_scale \
+                            for (down_block_res_sample_mask, down_block_res_sample_feat) in zip(down_block_res_samples_mask, down_block_res_samples_feat)]
+    mid_block_res_sample = mid_block_res_sample_mask * mask_control_scale + \
+                            mid_block_res_sample_feat * feat_control_scale
+    
     noise_pred = model.unet(
         latents, t, encoder_hidden_states=context,
         down_block_additional_residuals=down_block_res_samples,
         mid_block_additional_residual=mid_block_res_sample,)["sample"]
     return noise_pred
 
-def diffusion_step(model, controller, latents, mask, context, t, guidance_scale, low_resource=False, guess_mode=False):
+
+def diffusion_step(model, controller, latents, mask, feat, context, t, guidance_scale, low_resource=False, guess_mode=False, mask_control_scale=1.0, feat_control_scale=1.0):
     if low_resource:
-        noise_pred_uncond = get_noise_pred(model,latents, mask,t, context==context[0])
+        noise_pred_uncond = get_noise_pred(model,latents, mask, feat, t, context==context[0])
         if guess_mode:
-            noise_prediction_text = get_noise_pred(model, latents, None, t, context=context[1])
+            noise_prediction_text = get_noise_pred(model, latents, None, None, t, context=context[1])
         else:
-            noise_prediction_text = get_noise_pred(model, latents, mask, t, context=context[1])
+            noise_prediction_text = get_noise_pred(model, latents, mask, feat, t, context=context[1])
     else:
         #print("Latent: ", latents.shape, latents.requires_grad)
         latents_input = torch.cat([latents] * 2)
         masks = torch.cat([mask] * 2)
+        feats = torch.cat([feat] * 2)
         #print("Latent_input: ", latents_input.shape, latents_input.requires_grad)
         
-        noise_pred = get_noise_pred(model,latents_input,masks, t, context=context, guess_mode=guess_mode)
+        noise_pred = get_noise_pred(model, latents_input, masks, feats, t, context=context, guess_mode=guess_mode, mask_control_scale=mask_control_scale, feat_control_scale=feat_control_scale)
         noise_pred_uncond, noise_prediction_text = noise_pred.chunk(2)
         
     noise_pred = noise_pred_uncond + guidance_scale * (noise_prediction_text - noise_pred_uncond)
