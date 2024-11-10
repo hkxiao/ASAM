@@ -22,21 +22,20 @@ from skimage.metrics import mean_squared_error as compare_mse
 from pycocotools import mask
 import argparse
 import sys
-from ControlNet_last.process_feat import process_feat, clip_feat
+from ControlNet.process_feat import process_feat, clip_feat
 from torch.nn import functional as F
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
-# model setting
-parser.add_argument('--model', type=str, default='sam', help='cnn')
-parser.add_argument('--model_type', type=str, default='vit_b', help='cnn')
+# Model Setting
 parser.add_argument('--aigc_model_type', type=str, default='SD1.5', help='cnn')
 parser.add_argument('--mask_conditioning_channels', type=int, default=3, help='cnn')
 parser.add_argument('--feat_conditioning_channels', type=int, default=3, help='cnn')
 parser.add_argument('--mask_control_scale', type=float, default=0.5, help='cnn')
 parser.add_argument('--feat_control_scale', type=float, default=0.5, help='cnn')
+parser.add_argument('--aigc_img_size', type=int, default=512, help='cnn')
 
-# base setting
+# Base Setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
@@ -44,14 +43,14 @@ parser.add_argument('--check_controlnet', action='store_true')
 parser.add_argument('--check_inversion', action='store_true')
 parser.add_argument('--check_crash', action='store_true')
 
-# inversion setting
+# Inversion Setting
 parser.add_argument('--inversion_type', type=str, default='null_text_inversion')
 parser.add_argument('--steps', type=int, default=10, help='cnn')
 parser.add_argument('--ddim_steps', default=50, type=int, help='random seed')   
 parser.add_argument('--guess_mode', action='store_true')   
 parser.add_argument('--guidence_scale', default=7.5, type=float, help='random seed')   
 
-# path setting
+# Path Setting
 parser.add_argument('--data_root', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--save_root', default='work_dirs/sa_000000-Grad', type=str, help='random seed')   
 parser.add_argument('--control_mask_dir', default='/data/tanglv/data/sam-1b/sa_000000', type=str, help='random seed')    
@@ -383,6 +382,7 @@ class NullInversion:
                                   set_alpha_to_one=False)
         self.model = model
         self.tokenizer = self.model.tokenizer
+        if args.aigc_model_type in ['SD-XL','SSD-1B']: self.tokenizer_2 = self.model.tokenizer_2
         self.model.scheduler.set_timesteps(NUM_DDIM_STEPS)
         self.prompt = None
         self.context = None
@@ -596,7 +596,7 @@ class NullInversion:
         self.init_prompt(prompt)
         ptp_utils.register_attention_control(self.model, None)
         
-        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt =  Image.open(img_path).convert('RGB').resize((args.aigc_img_size,args.aigc_img_size))
         image_gt = np.array(image_gt).astype(np.float32)
         
         if verbose:
@@ -630,7 +630,7 @@ class NullInversion:
         self.init_prompt(prompt)
         ptp_utils.register_attention_control(self.model, None)
         
-        image_gt =  Image.open(img_path).convert('RGB').resize((512,512))
+        image_gt =  Image.open(img_path).convert('RGB').resize((args.aigc_img_size,args.aigc_img_size))
         image_gt = np.array(image_gt).astype(np.float32)
         
         image_rec, ddim_latents = self.ddim_inversion(image_gt, mask=mask_control, feat=feat_control)
@@ -642,8 +642,9 @@ class NullInversion:
 @torch.no_grad()
 def text2image_ldm_stable(
     model,
-    prompt:  List[str],
-    controller,
+    prompt: List[str],
+    negative_prompt: List[str] = [""],
+    controller=EmptyControl(),
     num_inference_steps: int = 50,
     guidance_scale: Optional[float] = 7.5,
     generator: Optional[torch.Generator] = None,
@@ -653,12 +654,18 @@ def text2image_ldm_stable(
     uncond_embeddings=None,
     noise_loss_list=None,
     start_time=50,
-    return_type='image'
+    return_type='image',
+    aigc_model_type='SD-1.5',
+    guess_mode=False,
+    mask_control_scale=1.0,
+    feat_control_scale=1.0,
+    aigc_img_size=512,
 ):
     batch_size = len(prompt)
     ptp_utils.register_attention_control(model, controller)
-    height = width = 512
+    height = width = aigc_img_size
     
+    # Text Embeddings
     text_input = model.tokenizer(
         prompt,
         padding="max_length",
@@ -667,15 +674,57 @@ def text2image_ldm_stable(
         return_tensors="pt",
     )
     text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
+
+    # Text Embeddings2
+    if aigc_model_type in ['SD-XL', 'SSD-1B']:
+        text_input_2 = model.tokenizer_2(
+            prompt,
+            padding="max_length",
+            max_length=model.tokenizer_2.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        text_embeddings_2 = model.text_encoder_2(text_input_2.input_ids.to(model.device), output_hidden_states=True)
+        text_pooled_embeddings = text_embeddings_2[0]
+        text_embeddings_2 = text_embeddings_2.hidden_states[-2]
+        text_embeddings = torch.cat([text_embeddings, text_embeddings_2],-1)
+    
+    # Uncond Embeddings
     max_length = text_input.input_ids.shape[-1]
     if uncond_embeddings is None:
         uncond_input = model.tokenizer(
-            [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
+            negative_prompt * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
         )
         uncond_embeddings_ = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
     else:
         uncond_embeddings_ = None
 
+    if aigc_model_type in ['SD-XL', 'SSD-1B']:
+        # Uncond Embeddings2
+        uncond_input_2 = model.tokenizer_2(
+            negative_prompt, padding="max_length", max_length=model.tokenizer_2.model_max_length,
+            return_tensors="pt"
+        )
+        uncond_embeddings_2 = model.text_encoder_2(uncond_input_2.input_ids.to(model.device),output_hidden_states=True)
+        if uncond_embeddings is None: uncond_embeddings_ = torch.cat([uncond_embeddings_, uncond_embeddings_2.hidden_states[-2]], -1)
+        else: uncond_embeddings = torch.cat([uncond_embeddings, uncond_embeddings_2.hidden_states[-2]], -1)
+        
+        # Pooled Embeddings2
+        uncond_pooled_embeddings = uncond_embeddings_2[0]
+        pooled_context = torch.cat([uncond_pooled_embeddings, text_pooled_embeddings])
+        
+        # Add Time IDs   
+        add_time_ids = model._get_add_time_ids(
+            original_size=(1024,1024),
+            crops_coords_top_left=(0,0),
+            target_size=(1024,1024),
+            dtype=model.text_encoder_2.dtype,
+            text_encoder_projection_dim=1280,
+        ).to('cuda')
+        negative_add_time_ids = add_time_ids
+        add_time_ids = torch.cat([negative_add_time_ids,add_time_ids])    
+    else: pooled_context, add_time_ids = None, None, None
+    
     latent, latents = ptp_utils.init_latent(latent, model, height, width, generator, batch_size)
     model.scheduler.set_timesteps(num_inference_steps)
     for i, t in enumerate(tqdm(model.scheduler.timesteps[-start_time:])):
@@ -683,13 +732,16 @@ def text2image_ldm_stable(
             context = torch.cat([uncond_embeddings[i].expand(*text_embeddings.shape), text_embeddings])
         else:
             context = torch.cat([uncond_embeddings_, text_embeddings])
-
-        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, feat_control, context, t, guidance_scale, \
-            low_resource=False, guess_mode=args.guess_mode, mask_control_scale=args.mask_control_scale, feat_control_scale=args.feat_control_scale)
-        if noise_loss_list: latents = latents + noise_loss_list[i]
-        #print(torch.max(context), torch.min(context), torch.max(latents),  torch.min(latents), torch.max(noise_loss_list[i]), torch.min(noise_loss_list[i]))
+        
+        latents = ptp_utils.diffusion_step(model, controller, latents, mask_control, feat_control, context, t, guidance_scale, pooled_context, add_time_ids,\
+            low_resource=False, guess_mode=guess_mode, mask_control_scale=mask_control_scale, feat_control_scale=feat_control_scale, aigc_model_type=aigc_model_type)
+        
+        if noise_loss_list:
+            latents = latents + noise_loss_list[i]
+        #print(torch.max(context), torch.min(context), torch.max(latents), torch.min(latents), torch.max(noise_loss_list[i]), torch.min(noise_loss_list[i]))
     
     if return_type == 'image':
+        print("image")
         image = ptp_utils.latent2image(model.vae, latents)
     else:
         image = latents
@@ -701,7 +753,8 @@ def run_and_display(prompts, controller, latent=None, mask_control=None, feat_co
         print("w.o. prompt-to-prompt")
         images, latent = run_and_display(prompts, EmptyControl(), latent=latent, mask_control=mask_control, feat_control=feat_control, run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, mask_control=mask_control, feat_control=feat_control, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings, noise_loss_list=noise_loss_list)
+    images, x_t = text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, mask_control=mask_control, feat_control=feat_control, num_inference_steps=NUM_DDIM_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator, uncond_embeddings=uncond_embeddings, noise_loss_list=noise_loss_list, \
+        guess_mode=args.guess_mode, mask_control_scale=args.mask_control_scale, feat_control_scale=args.feat_control_scale)
     if verbose:
         ptp_utils.view_images(images, prefix=prefix)
     return images, x_t
@@ -712,7 +765,7 @@ def check_controlnet():
 
     control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     control_image = np.array(control_image)
-    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = cv2.resize(control_image, (args.aigc_img_size,args.aigc_img_size)) / 255.0
     
     output = ldm_stable(
     "",  image=control_image,num_inference_steps=50, guidance_scale=1.0
@@ -723,7 +776,7 @@ def check_controlnet():
     output.save('check_controlnet_pth.png')
     
     controller = AttentionStore()
-    x_t = torch.randn((1, ldm_stable.unet.in_channels,  512 // 8, 512 // 8))
+    x_t = torch.randn((1, ldm_stable.unet.in_channels,  args.aigc_img_size // 8, args.aigc_img_size // 8))
     run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=control_image,uncond_embeddings=None, verbose=True, prefix='check_controlnet_use')
 
 def check_inversion():
@@ -737,7 +790,7 @@ def check_inversion():
     
     control_image = Image.open(os.path.join(args.control_mask_dir, f'sa_{str(id)}.png'))
     control_image = np.array(control_image)
-    control_image = cv2.resize(control_image, (512,512)) / 255.0
+    control_image = cv2.resize(control_image, (args.aigc_img_size,args.aigc_img_size)) / 255.0
     control_image = torch.from_numpy(control_image).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
     controller = AttentionStore()
     
@@ -754,7 +807,7 @@ def check_crash():
 if __name__ == '__main__':
     if args.check_crash: check_crash()
     
-    # Load Stable Diffusion 
+    # Load Stable Diffusion with ControlNet
     scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", clip_sample=False, set_alpha_to_one=False)
     MY_TOKEN = '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'
     LOW_RESOURCE = False 
@@ -763,26 +816,32 @@ if __name__ == '__main__':
     MAX_NUM_WORDS = 77
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     
+    ## Mask ControlNet
     if 'pth' in args.mask_controlnet_path : mask_controlnet = ControlNetModel.from_single_file(args.mask_controlnet_path).to(device)
     else: mask_controlnet = ControlNetModel.from_pretrained(args.mask_controlnet_path).to(device)
 
+    ## Feature ControlNet
     if 'pth' in args.feat_controlnet_path : feat_controlnet = ControlNetModel.from_single_file(args.feat_controlnet_path, conditioning_channels=args.feat_conditioning_channels).to(device)
     else: feat_controlnet = ControlNetModel.from_pretrained(args.feat_controlnet_path).to(device)
 
-    ldm_stable = StableDiffusionControlNetPipeline.from_pretrained(args.sd_path, use_auth_token=MY_TOKEN,controlnet=mask_controlnet, scheduler=scheduler).to(device)
+    ## Stable Diffusion
+    if args.aigc_model_type in ['SD-XL', 'SSD-1B']:
+        ldm_stable = StableDiffusionXLControlNetPipeline.from_pretrained(args.sd_path, use_auth_token=MY_TOKEN,controlnet=mask_controlnet, scheduler=scheduler).to(device)
+    else:
+        ldm_stable = StableDiffusionControlNetPipeline.from_pretrained(args.sd_path, use_auth_token=MY_TOKEN,controlnet=mask_controlnet, scheduler=scheduler).to(device)
     ldm_stable.feat_controlnet = feat_controlnet
     ldm_stable.mask_controlnet = mask_controlnet
-    
     try:
         ldm_stable.disable_xformers_memory_efficient_attention()
     except AttributeError:
         print("Attribute disable_xformers_memory_efficient_attention() is missing")
     tokenizer = ldm_stable.tokenizer
-    if args.aigc_model_type == 'SDXL': tokenizer_2 = ldm_stable.tokenizer_2
+    if args.aigc_model_type in ['SDXL', 'SSD']: tokenizer_2 = ldm_stable.tokenizer_2
     
+    # Inversion Object
     inversion = NullInversion(ldm_stable)
     
-    # Load Caption
+    # Load Captions
     captions = {}
     with open(args.caption_path,'r') as f:
         lines = f.readlines()
@@ -790,51 +849,39 @@ if __name__ == '__main__':
             json_dict = json.loads(line.strip()) 
             captions[json_dict['img'].strip()] = json_dict['prompt'].strip()   
             
-    # Check controlnet & inversion
+    # Check Controlnet & Inversion
     if args.check_controlnet: check_controlnet()
     if args.check_inversion: check_inversion()
     if args.check_inversion or args.check_controlnet: raise NameError 
     
-    # Prepare save dir
+    # Prepare Save Directory
     if not os.path.exists(args.save_root): os.mkdir(args.save_root)
     if not os.path.exists(os.path.join(args.save_root , 'pair')): os.mkdir(os.path.join(args.save_root , 'pair'))
     if not os.path.exists(os.path.join(args.save_root , 'inv')): os.mkdir(os.path.join(args.save_root , 'inv'))
     if not os.path.exists(os.path.join(args.save_root , 'embeddings')): os.mkdir(os.path.join(args.save_root , 'embeddings'))
     
-    # names = sorted(os.listdir(args.data_root))
-    # names = [name[:-4] for name in names if '.jpg' in name]
-    # if args.end != -1:
-    #     names = names[args.start:args.end+1]
-    # else:
-    #     names = names[args.start:]
-    
-    # print(names)    
-    # Adversarial optimization loop
-    # for name in tqdm(names):
-
+    # Inversion Loop
     for i in range(args.start, args.end):
+        
+        ## Prepare Path
         name = 'sa_' + str(i)
         img_path = args.data_root+'/'+name+'.jpg'
         control_mask_path = args.control_mask_dir+'/'+name+'.png'
         control_sd_feat_path = args.control_feat_dir+'/'+name+'_sd.pth'
         control_dino_feat_path = args.control_feat_dir+'/'+name+'_dino.pth'
         
-        # prepare img & control mask path
-        # img_path = os.path.join(args.data_root, name + '.jpg')
-        # control_mask_path = os.path.join(args.control_mask_dir, name + '.png')
-        
         if not os.path.exists(img_path):
             print(img_path, "does not exist!")
             continue
         
-        # init x_t & uncond_emb
+        ## Init x_t & Uncond_emb
         latent_path = f"{args.save_root}/embeddings/{name}_latent.pth"
         uncond_path = f"{args.save_root}/embeddings/{name}_uncond.pth"
         if os.path.exists(latent_path) and os.path.exists(uncond_path):
             print(latent_path, uncond_path, " has existed!")
             #continue
                 
-        # load catpion
+        ## Load Catpion
         if img_path.split('/')[-1] in captions:
             prompt = captions[img_path.split('/')[-1]]
         else: 
@@ -842,46 +889,44 @@ if __name__ == '__main__':
             continue
         print(prompt)
         
-        # load control mask
+        ## Load Control Mask
         mask_control = cv2.imread(control_mask_path).astype(np.float32)
         mask_control = cv2.cvtColor(mask_control, cv2.COLOR_BGR2RGB)
-        mask_control = cv2.resize(mask_control, (512,512)) / 255.0
+        mask_control = cv2.resize(mask_control, (args.aigc_img_size,args.aigc_img_size)) / 255.0
         mask_control = torch.from_numpy(mask_control).permute(2,0,1).unsqueeze(0).to(torch.float32).cuda()
         
-        # load control feat
+        ## Load Control Feature
         sd_feat = torch.load(control_sd_feat_path, map_location='cuda')
         dino_feat = torch.load(control_dino_feat_path, map_location='cuda')
 
-        # process control feat
+        ## Process Control Feat
         feat = process_feat(sd_feat, dino_feat, sd_target_dim=[4,4,4], dino_target_dim=12, dino_pca=True, using_sd=True, using_dino=True) #[1 C H W]
         feat = feat.flatten(-2).permute(0,2,1).unsqueeze(0) # (1,1,H*W,C)
         feat = clip_feat(feat, img_path = img_path) #[H W C]
         feat = feat.permute(2,0,1).unsqueeze(0) #[1 C H W]
-        feat = F.interpolate(feat, size=(512,512), mode='bilinear', align_corners=False).permute(0,2,3,1).squeeze(0) #[H W C]
-        feat_min = feat.view(512*512,-1).min(dim=0,keepdim=True)[0].view(1,1,-1)
-        feat_max = feat.view(512*512,-1).max(dim=0,keepdim=True)[0].view(1,1,-1)
+        feat = F.interpolate(feat, size=(args.aigc_img_size,args.aigc_img_size), mode='bilinear', align_corners=False).permute(0,2,3,1).squeeze(0) #[H W C]
+        feat_min = feat.view(args.aigc_img_size*args.aigc_img_size,-1).min(dim=0,keepdim=True)[0].view(1,1,-1)
+        feat_max = feat.view(args.aigc_img_size*args.aigc_img_size,-1).max(dim=0,keepdim=True)[0].view(1,1,-1)
         feat_control = (feat - feat_min) / (feat_max - feat_min)
         feat_control = feat_control.permute(2,0,1).unsqueeze(0)
             
-        # inversion
+        ## Inversion
         uncond_embeddings, noise_loss_list = None, None
         start = time.time()
         if args.inversion_type == 'null_text_inversion':
             (image_gt, image_enc), x_t, uncond_embeddings = inversion.invert(img_path, mask_control=mask_control, num_inner_steps=args.steps, prompt = prompt, offsets=(0,0,0,0), verbose=True)
         elif args.inversion_type == 'direct_inversion':
             (image_gt, image_rec), x_t, noise_loss_list = inversion.direct_invert(img_path, mask_control=mask_control, feat_control=feat_control, num_inner_steps=args.steps, prompt = prompt)        
-        
         print('Inversion Time:', time.time() - start)
-        
         if uncond_embeddings: gather_uncond_embeddings = torch.cat(uncond_embeddings, 0)        
         if noise_loss_list: gather_noise_loss = torch.cat(noise_loss_list, 0)
         
-        # save x_t & uncond_emb
+        ## Save x_t & uncond_emb
         torch.save(x_t, f'{args.save_root}/embeddings/{name}_latent.pth')
         if uncond_embeddings: torch.save(gather_uncond_embeddings, f'{args.save_root}/embeddings/{name}_uncond.pth')
         if noise_loss_list: torch.save(gather_noise_loss, f'{args.save_root}/embeddings/{name}_noise_loss.pth')
         
-        # show 
+        ## Show 
         controller = AttentionStore()
         image_inv, x_t = run_and_display(prompts=[prompt], controller=controller, run_baseline=False, latent=x_t, mask_control=mask_control, feat_control=feat_control, uncond_embeddings=uncond_embeddings, noise_loss_list=noise_loss_list,verbose=False)
         ptp_utils.view_images([image_gt, image_inv[0]], prefix=f'{args.save_root}/pair/{name}', shuffix='.jpg')
