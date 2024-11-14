@@ -77,7 +77,7 @@ parser.add_argument('--beta', type=float, default=1, help='cnn')
 parser.add_argument('--norm', type=int, default=2, help='cnn')
 parser.add_argument('--eta', type=float, default=100.0, help='cnn')
 
-# base setting
+# Base setting
 parser.add_argument('--start', default=1, type=int, help='random seed')
 parser.add_argument('--end', default=11187, type=int, help='random seed')
 parser.add_argument('--seed', default=0, type=int, help='random seed')
@@ -87,7 +87,7 @@ parser.add_argument('--debug', action='store_true')
 parser.add_argument('--show_all_masks', action='store_true')
 parser.add_argument('--check_crash', action='store_true')
 
-# path setting
+# Path setting
 parser.add_argument('--prefix', type=str, default='', help='cnn')
 parser.add_argument('--data_root', default='sam-1b/sa_000000', type=str, help='random seed')   
 parser.add_argument('--save_root', default='output/sa_000000-Grad', type=str, help='random seed')   

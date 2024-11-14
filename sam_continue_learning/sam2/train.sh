@@ -9,4 +9,4 @@
 python training/train.py \
     -c configs/sam2.1_training/sam2.1_hiera_tiny_Adv-sa000000-large-scale_finetune.yaml \
     --use-cluster 0 \
-    --num-gpus 8
+    --num-gpus 1

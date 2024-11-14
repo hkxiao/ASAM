@@ -1,6 +1,6 @@
 import torch
 from torch.nn import functional as F
-from typing import List, Optional
+from typing import List, Optional, Union, Any
 import utils.misc as misc
 
 def point_sample(input, point_coords, **kwargs):
@@ -92,6 +92,7 @@ def dice_loss(
         inputs: torch.Tensor,
         targets: torch.Tensor,
         num_masks: float,
+        weight: torch.Tensor,
     ):
     """
     Compute the DICE loss, similar to generalized IOU for masks
@@ -108,8 +109,8 @@ def dice_loss(
     numerator = 2 * (inputs * targets).sum(-1)
     denominator = inputs.sum(-1) + targets.sum(-1)
     loss = 1 - (numerator + 1) / (denominator + 1)
-    return loss.sum() / num_masks
-
+    
+    return (loss*weight).sum() / num_masks
 
 dice_loss_jit = torch.jit.script(
     dice_loss
@@ -120,6 +121,7 @@ def sigmoid_ce_loss(
         inputs: torch.Tensor,
         targets: torch.Tensor,
         num_masks: float,
+        weight: torch.Tensor,
     ):
     """
     Args:
@@ -132,9 +134,8 @@ def sigmoid_ce_loss(
         Loss tensor
     """
     loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-
-    return loss.mean(1).sum() / num_masks
-
+    
+    return  (loss.mean(1)*weight).sum() / num_masks
 
 sigmoid_ce_loss_jit = torch.jit.script(
     sigmoid_ce_loss
@@ -157,13 +158,13 @@ def calculate_uncertainty(logits):
     gt_class_logits = logits.clone()
     return -(torch.abs(gt_class_logits))
 
-def loss_masks(src_masks, target_masks, num_masks, oversample_ratio=3.0):
+def loss_masks(src_masks, target_masks, num_masks, weight=None, oversample_ratio=3.0):
     """Compute the losses related to the masks: the focal loss and the dice loss.
     targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
     """
 
     # No need to upsample predictions as we are using normalized coordinates :)
-
+    
     with torch.no_grad():
         # sample point_coords
         point_coords = get_uncertain_point_coords_with_randomness(
@@ -186,9 +187,12 @@ def loss_masks(src_masks, target_masks, num_masks, oversample_ratio=3.0):
         point_coords,
         align_corners=False,
     ).squeeze(1)
-
-    loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels, num_masks)
-    loss_dice = dice_loss_jit(point_logits, point_labels, num_masks)
+    
+    
+    if weight==None: weight = torch.ones(src_masks.shape[0]).cuda()
+    
+    loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels, num_masks, weight=weight)
+    loss_dice = dice_loss_jit(point_logits, point_labels, num_masks, weight=weight)
 
     del src_masks
     del target_masks

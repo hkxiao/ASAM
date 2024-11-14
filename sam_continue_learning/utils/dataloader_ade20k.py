@@ -100,10 +100,10 @@ class Ade20kDataset(Dataset):
         gt = torch.tensor(gt, dtype=torch.float32)
 
         sample = {
-        "imidx": torch.from_numpy(np.array(idx)),
-        "image": im,
-        "label": gt,
-        "shape": torch.tensor(im.shape[-2:]),
+            "imidx": torch.from_numpy(np.array(idx)),
+            "image": im,
+            "label": gt,
+            "shape": torch.tensor(im.shape[-2:]),
         }
 
         if self.transform: 

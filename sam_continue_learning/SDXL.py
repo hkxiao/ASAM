@@ -15,6 +15,8 @@ from segment_anything_training import sam_model_registry
 from segment_anything_training.modeling import TwoWayTransformer, MaskDecoder
 import torch.distributed as dist
 from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
+from transformers import AutoModelForVision2Seq, AutoTokenizer, AutoImageProcessor, StoppingCriteria
+import PIL
 
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
 from utils.loss_mask import loss_masks
@@ -28,6 +30,9 @@ sys.path.append('sam2')
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from PIL import Image
+from diffusers import StableDiffusionXLControlNetPipeline, DDIMScheduler
+from diffusers import ControlNetModel
+
 sys.path.append('SAMed')
 #from SAMed.sam_lora_image_encoder import LoRA_Sam
 import yaml
@@ -495,638 +500,81 @@ def main(train_datasets, valid_datasets, args):
     print(len(valid_dataloaders), " valid dataloaders created")
     
     ### --- Step 2: Model for DistributedDataParallel---
-    if args.sam_type == 'sam':
-        net = MaskDecoder_Tuning(args.model_type, args.tuning_manner) 
-        if args.compile: net = torch.compile(net)
-        if torch.cuda.is_available(): net.cuda()
-        net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-        net_without_ddp = net.module
-        
-        if args.restore_model:
-            print("restore model from:", args.restore_model)
-            net_without_ddp.load_state_dict(torch.load(args.restore_model, map_location="cpu"))
 
-        parameters_grad, parameters_no_grad = 0, 0
-        for n,p in net_without_ddp.named_parameters():
-            if p.requires_grad: parameters_grad += 1
-            else: parameters_no_grad += 1
-        print("Second Stage Decoder parameters_grad Number:", parameters_grad)
-        print("Second Stage Decoder parameters_no_grad Number:", parameters_no_grad)
+    # Load SD-XL with ControlNet
+    controlnet = ControlNetModel.from_pretrained(
+        "../ControlNetSDXL/work_dirs/train_output_sdxl3/checkpoint-20000/controlnet", torch_dtype=torch.float32
+    ).cuda()
     
-    # To Do
-    elif args.sam_type == 'sam2' or args.sam_type == 'sam2.1':
-        net = MaskDecoder_Tuning('vit_b', args.tuning_manner) 
-        if args.compile: net = torch.compile(net)
-        if torch.cuda.is_available(): net.cuda()
-        net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-        net_without_ddp = net.module
-        
-        
-    if args.sam_type == 'sam':
-        sam_checkpoint_map = {
-            'vit_b': os.path.join(args.load_prefix,'../pretrained/sam_vit_b_01ec64.pth'),
-            'vit_l': '../pretrained/sam_vit_l_0b3195.pth',
-            'vit_h': '../pretrained/sam_vit_h_4b8939.pth',
-        }
-    elif args.sam_type == 'sam2':
-        sam_checkpoint_map = {
-            'vit_t':  '../pretrained/sam2_hiera_tiny.pt',
-        }
-    elif args.sam_type == 'sam2.1':
-        sam_checkpoint_map = {
-            'vit_t':  '../pretrained/sam2.1_hiera_tiny.pt',
-        }
+    pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
+        "../pretrained/SSD-1B", controlnet=controlnet, torch_dtype=torch.float32).to('cuda')
 
-    if args.sam_type == 'sam':
-        if 'adaptor' in args.tuning_manner:
-            with open(args.adaptor_config, 'r') as f:
-                adaptor_config = yaml.load(f, Loader=yaml.FullLoader)
-            sam = models.make(adaptor_config['model']).cuda()
-            for name, para in sam.named_parameters():
-                if "image_encoder" in name and "prompt_generator" not in name:
-                    para.requires_grad_(False)
-            sam.load_state_dict(torch.load(sam_checkpoint_map[args.model_type]), strict=False)
-        else: sam = sam_model_registry[args.model_type](sam_checkpoint_map[args.model_type])
-        
-        if args.tuning_manner == 'lora': sam = LoRA_Sam(sam, r=4).cuda() 
-    elif args.sam_type == 'sam2' or args.sam_type == 'sam2.1':
-        sam = build_sam2(args.model_config, sam_checkpoint_map[args.model_type])
-        predictor = SAM2ImagePredictor(sam)
-        
-        # ['output_tokens','decoder']
-        if args.tuning_manner ==  'output_tokens':
-            for n,p in sam.named_parameters():
-                if 'mask_tokens' not in n and 'iou_token' not in n and 'obj_score_token' not in n:
-                    p.requires_grad = False
-                else :
-                    print('SAM2:', n, 'need gradient', p.shape)
-                    
-    parameters_grad, parameters_no_grad = 0, 0
-    for n,p in sam.named_parameters():
-        if p.requires_grad: parameters_grad += 1
-        else: parameters_no_grad += 1
-    print("First Stage SAM parameters_grad Number:", parameters_grad)
-    print("First Stage SAM parameters_no_grad Number:", parameters_no_grad)
-        
-    if args.compile: sam = torch.compile(sam)
-    _ = sam.to(device=args.device)
-    
-    sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-    if args.restore_sam_model:
-        print("restore sam model from:", args.restore_sam_model)
-        if args.tuning_manner in ['lora']:
-            sam.module.load_lora_parameters(args.restore_sam_model)
-        else:
-            checkpoint = torch.load(args.restore_sam_model,map_location="cpu")
-            if args.restore_sam_model_keys: checkpoint = checkpoint[args.restore_sam_model_keys]
-            sam.module.load_state_dict(checkpoint)
-    sam_withou_ddp = sam.module
-    
-    ### --- Step 3: Train or Evaluate ---
-    if not args.eval:
-        print("--- define optimizer ---")
-        
-        if args.tuning_manner in ['lora','adaptor']: 
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, sam_withou_ddp.parameters()), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-        elif (args.sam_type=='sam2' or args.sam_type=='sam2.1') or args.tuning_manner in ['full_weights']: optimizer = optim.Adam(sam_withou_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
-        elif args.tuning_manner in ['output_tokens','decoder']: optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)        
-            
-        if not args.slow_start:
-            lr_scheduler = StepLR(optimizer, args.lr_drop_epoch)
-            lr_scheduler.last_epoch=args.start_epoch
-        else:
-            print("slow start & fast decay")
-            lr_scheduler = LambdaLR(optimizer, lr_lambda)
+    train(args, pipe, train_dataloaders)
 
-        train(args, net, sam, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
-    else:
-        evaluate(args, net, sam, valid_dataloaders)
+def apply_prompt_template(prompt):
+    s = (
+                '<|system|>\nA chat between a curious user and an artificial intelligence assistant. '
+                "The assistant gives helpful, detailed, and polite answers to the user's questions.<|end|>\n"
+                f'<|user|>\n{prompt}<|end|>\n<|assistant|>\n'
+            )
+    return s 
 
 
-def train(args, net, sam,optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
-    #evaluate(args, net, sam, valid_dataloaders)
-    
-    epoch_start = args.start_epoch
-    epoch_num = args.max_epoch_num
+def train(args, pipe, train_dataloaders):
+    # Load BLIP3
+    model_name_or_path = "../pretrained/Salesforce/xgen-mm-phi3-mini-instruct-interleave-r-v1.5"
+    model = AutoModelForVision2Seq.from_pretrained(model_name_or_path, trust_remote_code=True, torch_dtype=torch.float32)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True, use_fast=False, legacy=False, torch_dtype=torch.float32)
+    image_processor = AutoImageProcessor.from_pretrained(model_name_or_path, trust_remote_code=True, torch_dtype=torch.float32)
+    tokenizer = model.update_special_tokens(tokenizer)
+    model = model.to('cuda')
+    model.eval()
+    tokenizer.padding_side = "left"
+    tokenizer.eos_token = '<|end|>'
+    first_param_dtype = next(model.parameters()).dtype
+    print("Model parameter data type:", first_param_dtype)
 
-    net.train()
-    _ = net.to(device=args.device)
-        
-    for epoch in range(epoch_start,epoch_num): 
-        save_check_point(args, epoch, sam, net)
-        print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
- 
-        metric_logger = misc.MetricLogger(delimiter="  ")
-        train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
-    
-        for mini_batch_data in metric_logger.log_every(train_dataloaders,10):
-            data, adv_prompt_data, batch_adv_prompt_training = mini_batch_data[0], mini_batch_data[1], mini_batch_data[1]['adv_prompt_training']
-            images, labels, ori_im_path = data['image'].cuda(), data['label'].cuda(), data['ori_im_path']  # [K 3 1024 1024]   [K N 1024 1024]
-            batch_adv_prompt_training = batch_adv_prompt_training.cuda()
-            
-            K, N, H, W =labels.shape
-            labels = labels.reshape(K*N,H,W).cuda()  #[K*N 1024 1024]
-            images_np = images.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
-            
-            # Solve Standard Input Prompt
-            train_prompt_types = copy.copy(args.train_prompt_types)
-            labels_box = misc.masks_to_boxes(labels) #[K*N 4]
-            if 'gt_noisy_prompt' in data and data['gt_noisy_prompt'][0] == True: 
-                labels_box = misc.box_noise(labels_box, data['boxes_noise_scale'][0].cpu().item()) #[K*N 4]
-            try:
-                labels_points = misc.masks_sample_points(labels, k=random.choice(args.train_point_num)) #[K*N 10 2]
-            except:
-                if 'points' in train_prompt_types: train_prompt_types.remove('points')
-            
-            labels_256 = F.interpolate(labels.unsqueeze(1), size=(256, 256), mode='bilinear')
-            labels_noisemask = misc.masks_noise(labels_256) #[K*N 1 256 256] # 暂时不使用
-            
-            # Solve Standard Input
-            batched_input = []
-            for bi in range(len(images_np)):
-                dict_input = dict()
-                input_image = torch.as_tensor(images_np[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
-                dict_input['image'] = input_image 
-                train_prompt_type = random.choice(train_prompt_types)
-                
-                sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
-                if train_prompt_type == 'boxes':
-                    dict_input['boxes'] = labels_box[sparse_slice,...]  #N*4
-                    
-                elif train_prompt_type == 'points':
-                    point_coords = labels_points[sparse_slice,...] # N k 2
-                    dict_input['point_coords'] = point_coords
-                    dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N k]
-                else:
-                    raise NotImplementedError
-                
-                dict_input['original_size'] = images_np[0].shape[:2]
-                batched_input.append(dict_input)
-            
-            # Solve Adversarial Input Prompt
-            if batch_adv_prompt_training[0]:
-                adv_boxes, adv_points, adv_prompt_images, adv_prompt_labels = adv_prompt_data['adv_boxes'].cuda().view(-1,4).contiguous(), adv_prompt_data['adv_points'].cuda().view(K*N,-1,2).contiguous(),\
-                    adv_prompt_data['image'].cuda(), adv_prompt_data['label'].cuda().reshape(K*N,H,W)
-                    # [K*N,4] [K*N 10 2]
-                adv_prompt_images_np = adv_prompt_images.permute(0, 2, 3, 1).cpu().numpy()  #[K 1024 1024 3]
-                
-                # Solve Adversarial Input
-                for bi in range(len(adv_prompt_images_np)):
-                    dict_input = dict()
-                    input_image = torch.as_tensor(adv_prompt_images_np[bi].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # [3 1024 1024]
-                    dict_input['image'] = input_image 
+    metric_logger = misc.MetricLogger(delimiter="  ")
+    for mini_batch_data in metric_logger.log_every(train_dataloaders,10):
+        data, adv_prompt_data, batch_adv_prompt_training = mini_batch_data[0], mini_batch_data[1], mini_batch_data[1]['adv_prompt_training']
+        ori_im_path = data['ori_im_path']  # [K 3 1024 1024]   [K N 1024 1024]
 
-                    train_prompt_type = random.choice(train_prompt_types)
-                    sparse_slice, dense_slice = slice(bi*N,(bi+1)*N), slice(bi*N,(bi+1)*N)
-                    
-                    if train_prompt_type == 'boxes':
-                        dict_input['boxes'] = adv_boxes[sparse_slice,...]  #N*4
-                        
-                    elif train_prompt_type == 'points':
-                        point_coords = adv_points[sparse_slice,...] # N 10 2
-                        dict_input['point_coords'] = point_coords
-                        dict_input['point_labels'] = torch.ones(point_coords.shape[:-1], device=point_coords.device) #[N 10]
-                    else:
-                        raise NotImplementedError
+        # BLIP3 Input
+        image_list = []
+        image_sizes = []
+        print(ori_im_path[0].dtype)
+        img = PIL.Image.open(ori_im_path[0])
+        image_list.append(image_processor([img], image_aspect_ratio='anyres')["pixel_values"].cuda())
+        image_sizes.append(img.size)
+        inputs = {"pixel_values": [image_list]}
+        query = "<image> Please describe the main content of this image."
+        prompt = apply_prompt_template(query)
+        language_inputs = tokenizer([prompt], return_tensors="pt")
+        inputs.update(language_inputs)
+        for name, value in inputs.items():
+            if isinstance(value, torch.Tensor):
+                inputs[name] = value.cuda()
+                print(name, value.dtype)
 
-                    dict_input['original_size'] = adv_prompt_images_np[0].shape[:2]
-                    batched_input.append(dict_input)
-            
-            # Forward
-            if (args.sam_type=='sam2' or args.sam_type=='sam2.1') or args.tuning_manner in ['full_weights', 'lora', 'adaptor']:
-                batched_output, interm_embeddings = sam(batched_input, multimask_output=False)
-                masks = torch.cat([batched_output[i_l]['low_res_logits'].cuda() for i_l in range(len(batched_output))], dim=0)
-            if args.tuning_manner in ['output_tokens','decoder']:
-                with torch.no_grad():
-                    batched_output, interm_embeddings = sam(batched_input, multimask_output=False)    
-                    
-            if args.two_stage:                
-                batch_len = len(batched_output)
-                encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-                image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-                sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-                dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
+        # BLIP3 Inference
+        generated_text = model.generate(**inputs, image_size=[image_sizes],
+                                        pad_token_id=tokenizer.pad_token_id,
+                                        eos_token_id=tokenizer.eos_token_id,
+                                        temperature=0.05,
+                                        do_sample=False, max_new_tokens=1024, top_p=None, num_beams=1,
+                                        )
+        prediction = tokenizer.decode(generated_text[0], skip_special_tokens=True).split("<|end|>")[0]
+        print("User: ", query)
+        print("Assistant: ", textwrap.fill(prediction, width=100))
+           
+        prompt = "aerial view, a futuristic research complex in a bright foggy jungle, hard lighting"
+        negative_prompt = "low quality, bad quality, sketches"
 
-                masks, ious = net(
-                    image_embeddings=encoder_embedding,
-                    image_pe=image_pe,
-                    sparse_prompt_embeddings=sparse_embeddings,
-                    dense_prompt_embeddings=dense_embeddings,
-                    multimask_output=False
-                ) # [K*N, 1 256, 256] logits
-            
-            # Standard Loss            
-            loss_mask, loss_dice =loss_masks(masks[:K*N,:,:,:], labels.unsqueeze(1)/255.0, K*N) 
-            loss_mask, loss_dice = loss_mask * args.alpha, loss_dice*args.alpha
-            loss = loss_mask + loss_dice
-            loss_dict = {"loss_mask": loss_mask, "loss_dice":loss_dice}
-                
-            # Adv Loss
-            if batch_adv_prompt_training[0]:     
-                loss_mask_adv_prompt, loss_dice_adv_prompt =  loss_masks(masks[K*N:,:,:,:], adv_prompt_labels.unsqueeze(1)/255.0, K*N, weight=batch_adv_prompt_training.unsqueeze(1).expand(K,N).contiguous().view(K*N))
-                loss_mask_adv_prompt, loss_dice_adv_prompt = loss_mask_adv_prompt*args.beta, loss_dice_adv_prompt*args.beta
-                loss_adv_prompt = loss_mask_adv_prompt + loss_dice_adv_prompt
-                loss_dict["loss_mask_adv_prompt"],loss_dict["loss_dice_adv_prompt"] = loss_mask_adv_prompt, loss_dice_adv_prompt
-                loss += loss_adv_prompt
-            
-            loss_dict_reduced = misc.reduce_dict(loss_dict)
-            losses_reduced_scaled = sum(loss_dict_reduced.values())
-            loss_value = losses_reduced_scaled.item()
+        # generate image
+        image = pipe(
+            prompt, controlnet_conditioning_scale=1.0, image=labels
+        ).images[0]
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            metric_logger.update(training_loss=loss_value, **loss_dict_reduced)
-
-            # Train Vis
-            if args.train_vis:
-                if train_prompt_type =='boxes':
-                    save_dir = os.path.join(args.output, train_prompt_type, random.choice(train_datasets)['name'])
-                if train_prompt_type =='points':
-                    save_dir = os.path.join(args.output, train_prompt_type+'_'+str(args.point_num), random.choice(train_datasets)['name'])
-                
-                Path(save_dir).mkdir(parents=True, exist_ok=True)
-                
-                for batch_i in range(images.shape[0]):
-                    base = ori_im_path[batch_i].split('/')[-1]
-                    index = base[::-1].index('.')
-                    base = base[:-index-1]
-                    save_base = os.path.join(save_dir, str(base)+'_normal')
-                    
-                    masks_vis = (F.interpolate(masks[batch_i*N:batch_i*N+N,:,:,:].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu() # [N,1,1024,1024]
-                    image_np = images_np[batch_i].astype(dtype=np.uint8)  #[1024 1024 3]
-                    cv2.imwrite(save_base+'_im.jpg',image_np[:,:,::-1])
-                    
-                    iou, boundary_iou = [0]*N, [0]*N 
-                    batch_slice = slice(batch_i*N,(batch_i+1)*N) 
-                    
-                    if train_prompt_type =='boxes':
-                        show_anns(labels[batch_slice].cpu(), masks_vis, None, None, labels_box[batch_slice].cpu(), save_base , image_np, iou, boundary_iou)
-                    elif train_prompt_type =='points':
-                        show_anns(labels[batch_slice].cpu(), masks_vis, labels_points[batch_slice].cpu(), torch.ones(labels_points[batch_slice].shape[:2]).cpu(), None, save_base, image_np, iou, boundary_iou)
-                    else:
-                        raise NotImplementedError
-            
-        print("Finished epoch:      ", epoch)
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger)
-        train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
-
-        if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(f"Epoch {str(epoch)}: "+str(train_stats)[1:-1]+'\n')
-        
-        lr_scheduler.step()
-        dist.barrier()
-        test_stats = evaluate(args, net, sam, valid_dataloaders)
-        train_stats.update(test_stats)
-        if epoch % args.model_save_fre == 0: save_check_point(args, epoch, sam, net)
-
-            
-    # Finish training
-    print("Training Reaches The Maximum Epoch Number")
-    
-    # merge sam and tune_decoder
-    if args.sam_type!='sam2' and args.tuning_manner in ['output_tokens','decoder'] and  misc.is_main_process():        
-        sam_checkpoint_map = {
-            'vit_b': '../pretrained/sam_vit_b_01ec64.pth',
-            'vit_l': '../pretrained/sam_vit_b_01ec64.pth',
-            'vit_h': '../pretrained/sam_vit_b_01ec64.pth',
-        }
-        sam_ckpt = torch.load(sam_checkpoint_map[args.model_type]) 
-
-        hq_decoder = torch.load(args.output + model_name)
-        for key in hq_decoder.keys():
-            if 'mask_token' in key or 'iou_token' in key:
-                sam_key = 'mask_decoder.'+key
-                sam_ckpt[sam_key] = hq_decoder[key]
-        model_name = "/asam_epoch_"+str(epoch)+".pth"
-        torch.save(sam_ckpt, args.output + model_name)
-
-
-def save_check_point(args, epoch, sam, net):
-    model_name = "/epoch_"+str(epoch)+".pth"
-    print('come here save at', args.output + model_name)
-    if (args.sam_type=='sam2' or args.sam_type=='sam2.1')or args.tuning_manner in ['full_weights', 'adaptor']:
-        misc.save_on_master(sam.module.state_dict(), args.output + model_name)
-    elif args.tuning_manner in ['lora'] and misc.is_main_process():
-        sam.module.save_lora_parameters(args.output + model_name)            
-    elif args.tuning_manner in ['output_tokens','decoder']:
-        misc.save_on_master(net.module.state_dict(), args.output + model_name)
-    
-@torch.no_grad()
-def compute_iou(preds, target):
-    assert target.shape[1] == 1, 'only support one mask per image now'
-    if(preds.shape[2]!=target.shape[2] or preds.shape[3]!=target.shape[3]):
-        postprocess_preds = F.interpolate(preds, size=target.size()[2:], mode='bilinear', align_corners=False)
-    else:
-        postprocess_preds = preds
-    iou = 0
-    iou_list = []
-    #print(len(preds))
-    for i in range(0,len(preds)):
-        single_iou = misc.mask_iou(postprocess_preds[i],target[i])
-        iou = iou + single_iou
-        iou_list.append(single_iou)
-    return iou / len(preds), iou_list
-
-@torch.no_grad()
-def compute_boundary_iou(preds, target):
-    assert target.shape[1] == 1, 'only support one mask per image now'
-    if(preds.shape[2]!=target.shape[2] or preds.shape[3]!=target.shape[3]):
-        postprocess_preds = F.interpolate(preds, size=target.size()[2:], mode='bilinear', align_corners=False)
-    else:
-        postprocess_preds = preds
-    iou = 0
-    iou_list = []
-    for i in range(0,len(preds)):
-        single_iou = misc.boundary_iou(target[i],postprocess_preds[i])
-        iou = iou + single_iou
-        iou_list.append(single_iou)
-    return iou / len(preds), iou_list
-
-def bad_examples_info(bad_examples, metric_logger, k):
-    bad_examples[0] += 1
-    loss_dict = {"val_iou_"+str(k): torch.tensor(0.5).cuda(), "val_boundary_iou_"+str(k): torch.tensor(0.5).cuda()}
-    if args.eval_stability: loss_dict
-    
-    loss_dict_reduced = misc.reduce_dict(loss_dict)
-    metric_logger.update(**loss_dict_reduced)
-
-@torch.no_grad()
-def evaluate_one_sample(args, net, sam, bad_examples, dataset_id, metric_logger,  iou_head_prediction_sum, all_mask_nums, max_len, data_val, k, val_idx):
-    imidx_val, images_val, labels_val, shapes_val, labels_ori, ori_im_path = data_val['imidx'], data_val['image'].cuda(), data_val['label'].cuda(), data_val['shape'], data_val['ori_label'], data_val['ori_im_path']
-    
-    K,N,H,W = labels_val.shape
-    K,N,h,w = labels_ori.shape
-    
-    if N == 0: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
-        
-    labels_val = labels_val.reshape(K*N,H,W).cuda() #K*N 1024 1024 
-    labels_ori = labels_ori.reshape(K*N,h,w).cuda()
-                
-    images_val_np = images_val.permute(0, 2, 3, 1).cpu().numpy() # K 3 1024 1024 -> k 1024 1024 3
-    
-    if args.eval_prompt_type=='boxes':
-        labels_box = misc.masks_to_boxes(labels_val) #K*N 4    
-    if args.eval_prompt_type=='points':  
-        try: labels_points = misc.masks_sample_points(labels_val,k=args.point_num) #[K*N 10 2]
-        except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
-    
-    batched_input = []
-    dict_input = dict()
-    
-    input_image = torch.as_tensor(images_val_np[0].astype(dtype=np.uint8), device=sam.device).permute(2, 0, 1).contiguous() # 3 1024 1024
-    dict_input['image'] = input_image
-    if args.eval_prompt_type == 'boxes':
-        dict_input['boxes'] = labels_box #N 4
-    elif args.eval_prompt_type == 'points':
-        point_coords = labels_points #[N 10 2]
-        dict_input['point_coords'] = point_coords
-        dict_input['point_labels'] = torch.ones(point_coords.size()[:2], device=point_coords.device)
-    else:
-        raise NotImplementedError
-    
-    if args.eval_stability and args.eval_prompt_type == 'boxes':
-        dict_input['boxes'] = torch.cat([dict_input['boxes'],torch.cat([misc.box_noise(dict_input['boxes'], args.boxes_noise_scale) for i in range(args.stable_iter)],dim=0)])
-    
-    ## To do
-    if args.eval_stability and args.eval_prompt_type == 'points':
-        for i in range(args.stable_iter):
-            dict_input['point_coords'] = torch.cat([dict_input['point_coords'],misc.masks_sample_points(labels_val,k=args.point_num)])
-        dict_input['point_labels'] = torch.ones(dict_input['point_coords'].size()[:2], device=point_coords.device)
-        
-    dict_input['original_size'] = images_val_np[0].shape[:2]
-    batched_input.append(dict_input)
-    
-    if args.serial_prompt:
-        new_batched_input = []
-        for i in range((labels_ori.shape[0] * (args.stable_iter if args.eval_stability else 0) + labels_ori.shape[0] + args.serial_prompt_size -1 )// args.serial_prompt_size):
-            start, end = i*args.serial_prompt_size, min(i*args.serial_prompt_size+args.serial_prompt_size, labels_ori.shape[0] * args.stable_iter + labels_ori.shape[0])
-            if end - start < 1: return
-            
-            serial_slice = slice(start, end)
-            new_dict = {}
-            new_dict['image'] = batched_input[0]['image']
-            if args.eval_prompt_type == 'boxes': new_dict['boxes'] = batched_input[0]['boxes'][serial_slice]
-            if args.eval_prompt_type == 'points': 
-                new_dict['point_coords'] = batched_input[0]['point_coords'][serial_slice]
-                new_dict['point_labels'] = batched_input[0]['point_labels'][serial_slice]
-            new_dict['original_size'] = images_val_np[0].shape[:2]
-            
-            new_batched_input.append(new_dict)
-            
-        
-        batched_input = new_batched_input
-    
-    with torch.autocast(device_type="cuda"):
-        batched_output, interm_embeddings = sam(batched_input, multimask_output=args.eval_multimask_output, multiplexing_mode=True)
-        
-    batch_len = len(batched_output)
-    masks = torch.cat([batched_output[i_l]['low_res_logits'].cuda() for i_l in range(batch_len)], dim=0)
-    ious = torch.cat([batched_output[i_l]['iou_predictions'] for i_l in range(batch_len)], dim=0)
-
-    #import pdb; pdb.set_trace()
-    if args.baseline or args.two_stage == False:
-        masks = masks.to(torch.float32) if not args.eval_multimask_output else masks[:,args.mask_id:args.mask_id+1,:,:].to(torch.float32)
-        ious = ious.to(torch.float32) if not args.eval_multimask_output else ious[:,args.mask_id:args.mask_id+1].to(torch.float32)
-        iou_head_prediction_sum[0] += torch.sum(ious).item()
-        all_mask_nums[0] += torch.numel(ious)
-    else:
-        encoder_embedding = torch.cat([batched_output[i_l]['encoder_embedding'] for i_l in range(batch_len)], dim=0)
-        image_pe = [batched_output[i_l]['image_pe'] for i_l in range(batch_len)]
-        sparse_embeddings = [batched_output[i_l]['sparse_embeddings'] for i_l in range(batch_len)]
-        dense_embeddings = [batched_output[i_l]['dense_embeddings'] for i_l in range(batch_len)]
-        masks, ious = net(
-            image_embeddings=encoder_embedding,
-            image_pe=image_pe,
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            multimask_output=args.eval_multimask_output,
-        ) #[N,:,1024,1024]
-        
-        if args.eval_multimask_output: 
-            ious = ious[:,args.mask_id:args.mask_id+1]
-            masks = masks[:,args.mask_id:args.mask_id+1,:,:]
-        
-        masks = F.interpolate(masks, scale_factor=4, mode='bilinear', align_corners=False)
-        iou_head_prediction_sum[0] += torch.sum(ious).item()
-        all_mask_nums[0] += torch.numel(ious)
-        
-    # print(masks.shape, ious.shape)
-    # raise NameError
-    
-    # iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
-    # boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
-    
-    try:
-        iou,iou_list = compute_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))
-        boundary_iou,boundary_iou_list = compute_boundary_iou(masks[:labels_ori.shape[0]],labels_ori.unsqueeze(1))               
-        if args.eval_stability: stability, stability_list, stability_iou_list = compute_stability_refer_StableSAM(masks[labels_ori.shape[0]:], labels_ori)
-    except: bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
-    
-    #print(iou)
-    
-    if torch.isnan(iou).any() or torch.isnan(boundary_iou).any(): bad_examples_info(bad_examples,metric_logger,k); print_current_line(sys._getframe()); return
-
-    if args.eval_prompt_type =='boxes':
-        save_dir = os.path.join(args.output, args.eval_prompt_type, valid_datasets[dataset_id]['name'])
-    if args.eval_prompt_type =='points':
-        save_dir = os.path.join(args.output, args.eval_prompt_type+'_'+str(args.point_num), valid_datasets[dataset_id]['name'])
-    
-    Path(save_dir).mkdir(parents=True,exist_ok=True)
-
-    try:
-        base = ori_im_path[0].split('/')[-1]
-    except:
-        base = ori_im_path[0][0].split('/')[-1]
-
-    index = base[::-1].index('.')
-    base = base[:-index-1]
-    save_base = os.path.join(save_dir, str(base))
-    Path(save_base).mkdir(parents=True,exist_ok=True)
-    
-    if args.eval_record: record_iou(save_base, iou_list, boundary_iou_list)
-    if args.eval_stability and args.eval_record: record_stability(save_base, stability_list, stability_iou_list)
-    
-    #print(os.path.join(args.output, 'GT', valid_datasets[dataset_id]['name'],str(base))+'.png')
-    
-    # save GT
-    #Path(os.path.join(args.output, 'GT', valid_datasets[dataset_id]['name'])).mkdir(parents=True,exist_ok=True)
-    #cv2.imwrite(os.path.join(args.output, 'GT', valid_datasets[dataset_id]['name'],str(base))+'.png', labels_ori[0,...].detach().cpu().numpy())
-
-    if args.visualize or val_idx<5:
-        # Standard visualize
-        masks_vis = (F.interpolate(masks[:labels_val.shape[0]].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-        image_val_np = images_val_np[0].astype(dtype=np.uint8) #[1024,1024,3]
-        cv2.imwrite(save_base+'_im.jpg',image_val_np[:,:,::-1])
-        if args.eval_prompt_type=='boxes':
-            show_anns(labels_val.cpu(), masks_vis, None, None, labels_box.cpu(), save_base , image_val_np, iou_list, boundary_iou_list, boxes_color='gold')
-        elif args.eval_prompt_type=='points':
-            show_anns(labels_val.cpu(), masks_vis, labels_points.cpu(), torch.ones(labels_points.shape[:2]).cpu(), None, save_base , image_val_np, iou_list, boundary_iou_list)
-
-        # Adv prompt visualize
-        for i in range(args.stable_iter):
-            length = labels_val.shape[0]
-            masks_vis = (F.interpolate(masks[length*(i+1): length*(i+2)].detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-            image_val_np = images_val_np[0].astype(dtype=np.uint8) #[1024,1024,3]
-            
-            if args.eval_prompt_type=='boxes':
-                show_anns(labels_val.cpu(), masks_vis, None, None,  dict_input['boxes'][length*(i+1): length*(i+2)].cpu(), save_base, image_val_np, iou_list, boundary_iou_list, save_gt=False, suffix=str(i), boxes_color='red')
-            elif args.eval_prompt_type=='points':
-                show_anns(labels_val.cpu(), masks_vis, dict_input['point_coords'][length*(i+1): length*(i+2)].cpu(), torch.ones(dict_input['point_coords'][length*(i+1): length*(i+2)].shape[:2]).cpu(), None, save_base, image_val_np, iou_list, boundary_iou_list, save_gt=False, suffix=str(i))
-            
-    ## bug to fix
-    if args.visualize2:
-        masks_vis = (F.interpolate(masks.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-        imgs_ii = imgs[0].astype(dtype=np.uint8)
-        
-        if args.prompt_type=='box':
-            show_anns2(labels_val.cpu(), masks_vis, None, labels_box.cpu(), None, save_base , imgs_ii, iou_list, boundary_iou_list)
-        elif args.prompt_type=='point':
-            show_anns2(labels_val.cpu(), masks_vis, labels_points.cpu(), None, torch.ones(labels_points.shape[:2]).cpu(), save_base , imgs_ii, iou_list, boundary_iou_list)
-    
-    loss_dict = {"val_iou_"+str(valid_datasets[dataset_id]['name']): iou.cuda(), "val_boundary_iou_"+str(valid_datasets[dataset_id]['name']): boundary_iou.cuda()}
-    if args.eval_stability: loss_dict['val_stability_'+str(valid_datasets[dataset_id]['name'])] = stability.cuda()
-    
-    loss_dict_reduced = misc.reduce_dict(loss_dict)
-    metric_logger.update(**loss_dict_reduced)
-    
-    # 等待所有进程到达这里
-    dist.barrier()
-            
-@torch.no_grad()
-def evaluate(args, net, sam, valid_dataloaders):
-    net.eval()
-    print("Validating...")
-    test_stats = {}
-     
-    max_len = [0] 
-    for dataset_id, k in enumerate(range(len(valid_dataloaders))):
-        bad_examples = [0]
-        metric_logger = misc.MetricLogger(delimiter="  ")
-        valid_dataloader = valid_dataloaders[k]
-        iou_head_prediction_sum, all_mask_nums = [0], [0]
-        print('valid_dataloader len:', len(valid_dataloader), valid_datasets[dataset_id]['name'])
-        
-        val_idx = 0
-        for data_val in metric_logger.log_every(valid_dataloader,10):
-            evaluate_one_sample(args, net, sam, bad_examples, dataset_id, metric_logger,  iou_head_prediction_sum, all_mask_nums, max_len, data_val, k, val_idx)
-            try: evaluate_one_sample(args, net, sam, bad_examples, dataset_id, metric_logger,  iou_head_prediction_sum, all_mask_nums, max_len, data_val, k, val_idx)
-            except: bad_examples_info(bad_examples,metric_logger,k), print_current_line(sys._getframe()); 
-            val_idx += 1
-            
-        print(max_len[0])
-        print('============================')
-        # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger)
-        resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
-        test_stats.update(resstat)
-        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
-        
-        if args.eval_multimask_output:                
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-        else:
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-                    
-        text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
-        if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
-                f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
-                if args.eval_multimask_output:                
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-                else:
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n')
-                    
-        print('============================')
-        # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger)
-        resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
-        test_stats.update(resstat)
-        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
-        
-        if args.eval_multimask_output:                
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-        else:
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-                    
-        text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
-        if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
-                f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
-                if args.eval_multimask_output:                
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-                else:
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-        print('============================')
-        # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger)
-        resstat = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
-        test_stats.update(resstat)
-        print((str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n'))
-        
-        if args.eval_multimask_output:                
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-        else:
-            print(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-                    
-        text_log = {k: round(meter.global_avg*100,2) for k, meter in metric_logger.meters.items() if meter.count > 0}
-        if misc.is_main_process():
-            with open(args.output+'/log.txt','a') as f:
-                f.write(str(valid_datasets[dataset_id]['name'])+' '+ str(text_log)[1:-1].replace("'","")+'\n')
-                f.write(str(valid_datasets[dataset_id]['name'])+' bad examples:'+ str(bad_examples[0]) +'\n') 
-                if args.eval_multimask_output:                
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head for mask' + str(args.mask_id) + ': '+ str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-                else:
-                    f.write(str(valid_datasets[dataset_id]['name'])+' iou_head: ' + str(iou_head_prediction_sum[0]/all_mask_nums[0]) +'\n') 
-
-    return test_stats
 
 
 if __name__ == "__main__":
@@ -1134,61 +582,47 @@ if __name__ == "__main__":
     ### --------------- Configuring the Train and Valid datasets ---------------
         
     ## Train dataset
-
-    dataset_complex = {"name": "complex",
-                 "im_dir": "../data/sam-1b/sa_000000",
-                 "gt_dir": "../data/sam-1b/sa_000000_complex",
-                 "im_ext": ".jpg",
-                 "gt_ext": ".png"}
-    
     dataset_dis = {"name": "DIS5K-TR",
                  "im_dir": "./data/DIS5K/DIS-TR/im",
                  "gt_dir": "./data/DIS5K/DIS-TR/gt",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_thin = {"name": "ThinObject5k-TR",
                  "im_dir": "./data/thin_object_detection/ThinObject5K/images_train",
                  "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_train",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_fss = {"name": "FSS",
                  "im_dir": "./data/cascade_psp/fss_all",
                  "gt_dir": "./data/cascade_psp/fss_all",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_duts = {"name": "DUTS-TR",
                  "im_dir": "./data/cascade_psp/DUTS-TR",
                  "gt_dir": "./data/cascade_psp/DUTS-TR",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_duts_te = {"name": "DUTS-TE",
                  "im_dir": "./data/cascade_psp/DUTS-TE",
                  "gt_dir": "./data/cascade_psp/DUTS-TE",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_ecssd = {"name": "ECSSD",
                  "im_dir": "./data/cascade_psp/ecssd",
                  "gt_dir": "./data/cascade_psp/ecssd",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_msra = {"name": "MSRA10K",
                  "im_dir": "./data/cascade_psp/MSRA_10K",
                  "gt_dir": "./data/cascade_psp/MSRA_10K",
                  "im_ext": ".jpg",
-                 "gt_ext": ".png",
-                 'augmentation': True,}
+                 "gt_ext": ".png"}
 
     dataset_coift_val = {"name": "COIFT",
                  "im_dir": "./data/thin_object_detection/COIFT/images",
@@ -1360,8 +794,8 @@ if __name__ == "__main__":
     }
 
     dataset_sa000000_direct_inversion_adv_augmentation_img_adv_prompt_sam2 = {"name": "sam_subset",
-        "im_dir": "../work_dirs/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
-        "gt_dir": "../data/sam-1b/sa_000000",
+        "im_dir": "../output/sa_000000-Grad/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam-vit_b-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-0.5-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv",
+        "gt_dir": "../sam-1b/sa_000000",
         "adv_boxes_dir": '../output/sa_000000-Grad-SAM2/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam2-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',
         "adv_points_dir": '../output/sa_000000-Grad-SAM2/Attacker-7.5-50-AttackObject-image_points_boxes-Definder-sam2-vit_t-4-points_boxes-10-Loss-100.0-100.0-0.5-2-embedding_sup-100.0-Perturbation_Img-0.2-10-0.01-0.5-Perturbation_Boxes-20.0-10-4.0-0.5-0.1-Perturbation_Points-20.0-10-4.0-0.5-0.1/adv',        
         "im_ext": ".jpg",

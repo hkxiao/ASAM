@@ -105,6 +105,21 @@ class SAM2Train(SAM2Base):
                 p.requires_grad = False
 
     def forward(self, input: BatchedVideoDatapoint):
+        import pdb; pdb.set_trace()
+        pixel_mean = torch.tensor([123.675, 116.28, 103.53]).cuda()
+        pixel_std = torch.tensor([58.395, 57.12, 57.375]).cuda()
+        rgb_img = input.img_batch[0,0,...].permute(1,2,0) * pixel_std + pixel_mean
+        import cv2
+        img_np = rgb_img.cpu().numpy()
+        cv2.imwrite('img.jpg', img_np)
+        
+        import numpy as np
+        mask = input.masks[0,7,...].cpu().numpy().astype(np.uint8)
+        cv2.imwrite('mask.jpg', mask*255.0)
+        
+        vis = img_np * (mask[:,:,np.newaxis]>0)
+        cv2.imwrite('vis.jpg', vis)
+        
         if self.training or not self.forward_backbone_per_frame_for_eval:
             # precompute image features on all frames before tracking
             backbone_out = self.forward_image(input.flat_img_batch)

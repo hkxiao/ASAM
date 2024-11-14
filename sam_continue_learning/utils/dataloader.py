@@ -10,8 +10,6 @@ from copy import deepcopy
 from skimage import io
 import os
 from glob import glob
-
-
 import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torchvision import transforms, utils
@@ -27,6 +25,7 @@ from utils.dataloader_gtea import GTEADataset
 from utils.dataloader_LVIS import LVISDataset
 from utils.dataloader_BBC038v1 import BBC03bv1Dataset
 from utils.dataloader_woodscape import WoodscapeDataset
+import utils.misc as misc
 
 #### --------------------- dataloader online ---------------------####
 
@@ -36,7 +35,7 @@ def collate(batch):
     
     return batch
 
-def get_im_gt_name_dict(datasets, flag='valid', limit=-1, adv_prompt_training =False):
+def get_im_gt_name_dict(datasets, flag='valid', limit=-1):
     print("------------------------------", flag, "--------------------------------")
     name_im_gt_list = []
 
@@ -54,11 +53,22 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1, adv_prompt_training =F
                 "annotation_file": datasets[i]["annotation_file"]})
             print(datasets[i]["name"] + "continue")
             continue
-    
+        
         tmp_im_list, tmp_gt_list = [], []
-        for root, dirs, files in os.walk(datasets[i]["im_dir"]): 
-            tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
 
+        if os.path.dirname(datasets[i]["im_dir"]) == '../sam-1b':
+            for file in os.listdir(datasets[i]["im_dir"]):
+                if file.endswith(datasets[i]["im_ext"]): 
+                    tmp_im_list.append(datasets[i]["im_dir"]+os.sep+file)
+        else:
+            for root, dirs, files in os.walk(datasets[i]["im_dir"]):
+                if os.path.dirname(datasets[i]["im_dir"]) == '../sam-1b' and root != datasets[i]["im_dir"]: break 
+                tmp_im_list.extend(glob(root+os.sep+'*'+datasets[i]["im_ext"]))
+            
+        with open('demo.txt', 'w') as f:
+            for x in tmp_im_list:
+                f.write(x+'\n')
+        
         if 'DRAM' in datasets[i]["name"]:
             tmp_im_list = [x for x in tmp_im_list if 'train' not in x]        
         
@@ -88,11 +98,9 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1, adv_prompt_training =F
                 tmp_im_list = [x for x in tmp_im_list if os.path.exists(x.replace(datasets[i]["im_ext"],datasets[i]["gt_ext"]).replace(datasets[i]["im_dir"],datasets[i]["gt_dir"]))]
         
         tmp_im_list, tmp_gt_list = sorted(tmp_im_list), sorted(tmp_gt_list)
-        
-        
+         
         print('-im-',datasets[i]["name"],datasets[i]["im_dir"], ': ',len(tmp_im_list))
         print('-gt-', datasets[i]["name"],datasets[i]["gt_dir"], ': ',len(tmp_gt_list))
-
 
         name_im_gt_list.append({"dataset_name":datasets[i]["name"],
                                 "im_path":tmp_im_list,
@@ -100,15 +108,21 @@ def get_im_gt_name_dict(datasets, flag='valid', limit=-1, adv_prompt_training =F
                                 "im_ext":datasets[i]["im_ext"],
                                 "gt_ext":datasets[i]["gt_ext"]})
 
-        if adv_prompt_training: 
+        if 'augmentation' in datasets[i].keys() and datasets[i]["augmentation"]: name_im_gt_list[-1]['augmentation'] = True
+
+        if 'gt_noisy_prompt' in datasets[i].keys() and datasets[i]["gt_noisy_prompt"]: 
+            name_im_gt_list[-1]['gt_noisy_prompt'] = True 
+            name_im_gt_list[-1]['boxes_noise_scale'] = datasets[i]["boxes_noise_scale"]
+        
+        if 'adv_prompt' in datasets[i].keys() and datasets[i]["adv_prompt"]: 
             tmp_adv_boxes_list = [x.replace(datasets[i]["im_ext"],datasets[i]["adv_boxes_ext"]).replace(datasets[i]["im_dir"],datasets[i]["adv_boxes_dir"]) for x in tmp_im_list]
             tmp_adv_points_list = [x.replace(datasets[i]["im_ext"],datasets[i]["adv_points_ext"]).replace(datasets[i]["im_dir"],datasets[i]["adv_points_dir"]) for x in tmp_im_list]
             name_im_gt_list[-1]['adv_boxes_path'] = tmp_adv_boxes_list
             name_im_gt_list[-1]['adv_points_path'] = tmp_adv_points_list
-            
+        
     return name_im_gt_list
 
-def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1, batch_size_prompt_start=0, training=False, adv_prompt_training=False, numworkers=-1):
+def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_size_prompt=-1, batch_size_prompt_start=0, training=False, numworkers=-1, args=None):
     gos_dataloaders = []
     gos_datasets = []
 
@@ -126,8 +140,13 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
         
     if training:
         for i in range(len(name_im_gt_list)):
-            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True,batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start, adv_prompt_training=adv_prompt_training)
-            else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
+            my_transforms = [RandomHFlip(),
+                    LargeScaleJitter()  ##这个data augmentation可能会让mask全为0
+                ] if ('augmentation' in name_im_gt_list[i].keys() and name_im_gt_list[i]['augmentation']) else [Resize(args.input_size)]
+            
+            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), \
+                                                                    eval_ori_resolution = False, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start, mode='train')
+            else: gos_dataset = OnlineDataset([name_im_gt_list[i]], eval_ori_resolution = False,transform = transforms.Compose(my_transforms), mode='train')
             gos_datasets.append(gos_dataset)
 
         gos_dataset = ConcatDataset(gos_datasets)
@@ -142,7 +161,7 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
     else:
         for i in range(len(name_im_gt_list)):  
             print(name_im_gt_list[i]['dataset_name'])
-            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
+            if 'sam' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start, mode='test')
             #coco格式
             elif 'coco' in name_im_gt_list[i]['dataset_name']: gos_dataset = COCODataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             elif 'ovis' in name_im_gt_list[i]['dataset_name']: gos_dataset = SamDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True, batch_size_prompt=batch_size_prompt, batch_size_prompt_start=batch_size_prompt_start)
@@ -170,8 +189,6 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, batch_si
             elif 'LVIS' in name_im_gt_list[i]['dataset_name']: gos_dataset = LVISDataset(name_im_gt_list[i], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             elif 'BBC038v1' in name_im_gt_list[i]['dataset_name']: gos_dataset = BBC03bv1Dataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
             elif 'ZeroWaste' in name_im_gt_list[i]['dataset_name']: gos_dataset = GTEADataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution=True)
-
-            
             else: gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
             sampler = DistributedSampler(gos_dataset, shuffle=False)
             dataloader = DataLoader(gos_dataset, batch_size, sampler=sampler, drop_last=False, num_workers=num_workers_)
@@ -292,7 +309,7 @@ class LargeScaleJitter(object):
 
 
 class OnlineDataset(Dataset):
-    def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False):
+    def __init__(self, name_im_gt_list, transform=None, eval_ori_resolution=False, mode='test'):
 
         self.transform = transform
         self.dataset = {}
@@ -306,7 +323,6 @@ class OnlineDataset(Dataset):
         gt_ext_list = [] # gt ext
         for i in range(0,len(name_im_gt_list)):
             dataset_names.append(name_im_gt_list[i]["dataset_name"])
-            # dataset name repeated based on the number of images in this dataset
             dt_name_list.extend([name_im_gt_list[i]["dataset_name"] for x in name_im_gt_list[i]["im_path"]])
             im_name_list.extend([x.split(os.sep)[-1].split(name_im_gt_list[i]["im_ext"])[0] for x in name_im_gt_list[i]["im_path"]])
                 
@@ -328,26 +344,16 @@ class OnlineDataset(Dataset):
 
         self.eval_ori_resolution = eval_ori_resolution
 
+        self.mode = mode
+        
     def __len__(self):
         return len(self.dataset["im_path"])
+    
     def __getitem__(self, idx):
         im_path = self.dataset["im_path"][idx]
         gt_path = self.dataset["gt_path"][idx]
-        
-        if 'sam' not in self.dataset["gt_path"][idx]:
-            im = io.imread(im_path)
-            gt = io.imread(gt_path)
-        else:
-            #print(im_path)
-            all = io.imread(im_path)
-            # print(all.shape)
-            # print(type(all))
-            im, gt = all[:,:512,:], all[:,522:1034,:]
-            # import cv2
-            # cv2.imwrite("demo_im.png", im)
-            # cv2.imwrite("demo_gt.png", gt)
-            # cv2.imwrite("demo.png", all)
-            # raise NameError
+        im = io.imread(im_path)
+        gt = io.imread(gt_path)
             
         if len(gt.shape) > 2:
             gt = gt[:, :, 0]
@@ -358,24 +364,28 @@ class OnlineDataset(Dataset):
         im = torch.tensor(im.copy(), dtype=torch.float32)
         im = torch.transpose(torch.transpose(im,1,2),0,1)
         gt = torch.unsqueeze(torch.tensor(gt, dtype=torch.float32),0)
-        # print(torch.max(im), torch.min(im))
-        # print(torch.max(gt), torch.min(gt))
-        # raise NameError
+        
         sample = {
-        "imidx": torch.from_numpy(np.array(idx)),
-        "image": im,
-        "label": gt,
-        "shape": torch.tensor(im.shape[-2:]),
+            "imidx": torch.from_numpy(np.array(idx)),
+            "image": im,
+            "label": gt,
+            "shape": torch.tensor(im.shape[-2:]),
         }
         
         if self.transform:
             sample = self.transform(sample)
-
+        
+        sample["ori_im_path"]=self.dataset["im_path"][idx],
+        sample["ori_gt_path"]=self.dataset["gt_path"][idx],
+        sample["adv_prompt_training"]=False        
         if self.eval_ori_resolution:
-            # print(torch.max(im))
-            # raise NameError
             sample["ori_label"] = gt.type(torch.uint8)  # NOTE for evaluation only. And no flip here
-            sample['ori_im_path'] = self.dataset["im_path"][idx]
-            sample['ori_gt_path'] = self.dataset["gt_path"][idx]
-
+        
+        adv_prompt_sample = {}
+        adv_prompt_sample['image'], adv_prompt_sample['label'] =\
+        torch.squeeze(F.interpolate(torch.unsqueeze(im,0),(1024,1024),mode='bilinear'),dim=0),\
+        torch.squeeze(F.interpolate(torch.unsqueeze(gt,0),(1024,1024),mode='bilinear'),dim=0)  
+        adv_prompt_sample['adv_prompt_training'], adv_prompt_sample['adv_boxes'], adv_prompt_sample['adv_points'] = False, misc.masks_to_boxes(adv_prompt_sample['label']), misc.masks_sample_points(adv_prompt_sample['label'], k=10)
+        
+        if self.mode == 'train': return sample, adv_prompt_sample
         return sample

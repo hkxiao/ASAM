@@ -684,6 +684,7 @@ def text2image_ldm_stable(
             truncation=True,
             return_tensors="pt",
         )
+        
         text_embeddings_2 = model.text_encoder_2(text_input_2.input_ids.to(model.device), output_hidden_states=True)
         text_pooled_embeddings = text_embeddings_2[0]
         text_embeddings_2 = text_embeddings_2.hidden_states[-2]

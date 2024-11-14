@@ -192,7 +192,7 @@ class SA1BRawDataset(VOSRawDataset):
 
         video_frame_path = os.path.join(self.img_folder, video_name + ".jpg")
         video_mask_path = os.path.join(self.gt_folder, video_name + ".json")
-
+        print(video_frame_path)
         segment_loader = SA1BSegmentLoader(
             video_mask_path,
             mask_area_frac_thresh=self.mask_area_frac_thresh,

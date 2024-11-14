@@ -137,7 +137,7 @@ def view_images_with_title(images, titles, num_rows=1, offset_ratio=0.02, prefix
 
 def get_noise_pred(model, latents, masks, feats, t, context, guess_mode=None, mask_control_scale=1.0, feat_control_scale=1.0, pooled_context=None, add_time_ids=None, aigc_model_type='SD1.5'):
     added_cond_kwargs = {"text_embeds": pooled_context, "time_ids": add_time_ids}
-   
+    
     # Mask ControNet
     if masks != None:
         if aigc_model_type in ['SD-XL', 'SSD-1B']:
@@ -208,7 +208,7 @@ def get_noise_pred(model, latents, masks, feats, t, context, guess_mode=None, ma
         mid_block_res_sample =  mid_block_res_sample_feat * feat_control_scale
     
     # UNet
-    # import pdb; pdb.set_trace()
+    import pdb; pdb.set_trace()
     if aigc_model_type in ['SD-XL', 'SSD-1B']:
         noise_pred = model.unet(
             latents, t, encoder_hidden_states=context,
